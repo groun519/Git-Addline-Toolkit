@@ -13,7 +13,7 @@ import threading
 import tkinter as tk
 from typing import Iterable
 from pathlib import Path
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 from line_tracker import (
     DEFAULT_AUTHOR,
@@ -45,6 +45,7 @@ GRAPH_CANVAS_WIDTH = 420
 GRAPH_CANVAS_HEIGHT = 140
 BAR_LENGTH = 420
 GRAPH_CARD_WIDTH = GRAPH_CANVAS_WIDTH + 24
+NOTE_CARD_WIDTH = 420
 SETTINGS_FILE_NAME = "line_tracker_ui_settings.json"
 
 COLOR_BG = "#151a18"
@@ -131,22 +132,32 @@ def make_parser() -> argparse.ArgumentParser:
 class LineTrackerApp:
     def __init__(self, root: tk.Tk, args: argparse.Namespace) -> None:
         self.root = root
-        self.repo = find_repo_root(Path(args.repo)).resolve()
+        self.settings_path = Path(__file__).resolve().with_name(SETTINGS_FILE_NAME)
+        self.settings = self.load_settings()
+        saved_repo_path = str(self.settings.get("repo_path", "")).strip()
+        if saved_repo_path and Path(saved_repo_path).exists():
+            repo_seed = Path(saved_repo_path)
+        else:
+            repo_seed = Path(args.repo)
+        repo_candidate = find_repo_root(repo_seed).resolve()
+        if saved_repo_path:
+            try:
+                run_git(repo_candidate, ["rev-parse", "--is-inside-work-tree"])
+            except RuntimeError:
+                repo_candidate = find_repo_root(Path(args.repo)).resolve()
+        self.repo = repo_candidate
         self.goal = args.goal
         self.base_total = args.base_total
         self.base_commit = args.base_commit
-        self.author_raw = ""
         self.author_raw = args.author
         self.author = resolve_author(self.repo, args.author)
         self.ref = resolve_ref(self.repo, args.ref)
         self.today = args.today
         self.month_end = args.month_end
-        self.settings_path = Path(__file__).resolve().with_name(SETTINGS_FILE_NAME)
-        self.settings = self.load_settings()
         saved_geometry = str(self.settings.get("geometry", "")).strip()
-        default_width = 1300
-        default_height = 680
-        min_height = 620
+        default_width = 1385
+        default_height = 705
+        min_height = 670
         width = default_width
         height = default_height
         if saved_geometry:
@@ -296,9 +307,11 @@ class LineTrackerApp:
         self.note_done_initial = saved_note_done
         self.note_todo_initial = saved_note_todo
         self.auto_stage_var = tk.BooleanVar(value=saved_auto_stage)
+        self.repo_entry_var = tk.StringVar(value=str(self.repo))
 
         header_frame = ttk.Frame(container, style="App.TFrame")
         header_frame.grid(row=0, column=0, columnspan=4, sticky="ew", pady=(0, 10))
+        header_frame.columnconfigure(2, weight=1)
         accent_bar = tk.Frame(header_frame, bg=COLOR_ACCENT, width=6, height=34)
         accent_bar.grid(row=0, column=0, rowspan=2, sticky="ns", padx=(0, 10))
         self.title_label = ttk.Label(header_frame, text="Line Tracker", style="Title.TLabel")
@@ -309,6 +322,20 @@ class LineTrackerApp:
             style="Subtitle.TLabel",
         )
         self.subtitle_label.grid(row=1, column=1, sticky="w", pady=(2, 0))
+
+        repo_header = ttk.Frame(header_frame, style="App.TFrame")
+        repo_header.grid(row=0, column=2, rowspan=2, sticky="e", padx=(20, 0))
+        repo_header.columnconfigure(0, weight=1)
+
+        repo_header_label = ttk.Label(repo_header, text="리포 경로", style="Subtitle.TLabel")
+        repo_header_label.grid(row=0, column=0, sticky="w", pady=(0, 2))
+
+        self.repo_entry = ttk.Entry(repo_header, textvariable=self.repo_entry_var, width=52)
+        self.repo_entry.grid(row=1, column=0, sticky="ew")
+        self.repo_entry.bind("<Return>", self.on_repo_entry_enter)
+
+        self.repo_apply_button = ttk.Button(repo_header, text="리포 선택", command=self.browse_repo)
+        self.repo_apply_button.grid(row=1, column=1, sticky="e", padx=(8, 0))
 
         output_section = ttk.Frame(container, style="App.TFrame")
         output_section.grid(row=1, column=0, sticky="ew", padx=(0, 10))
@@ -465,7 +492,7 @@ class LineTrackerApp:
         right_area = ttk.Frame(container, style="App.TFrame")
         right_area.grid(row=1, column=2, rowspan=2, sticky="nw", padx=(14, 0))
         right_area.columnconfigure(0, weight=0, minsize=GRAPH_CARD_WIDTH)
-        right_area.columnconfigure(1, weight=0)
+        right_area.columnconfigure(1, weight=0, minsize=NOTE_CARD_WIDTH)
 
         graph_section = ttk.Frame(right_area, style="App.TFrame")
         graph_section.grid(row=0, column=0, sticky="nw", padx=(0, 10))
@@ -511,7 +538,7 @@ class LineTrackerApp:
 
         note_section = ttk.Frame(right_area, style="App.TFrame")
         note_section.grid(row=0, column=1, rowspan=2, sticky="nw", padx=(10, 0))
-        note_section.columnconfigure(0, weight=1)
+        note_section.columnconfigure(0, weight=1, minsize=NOTE_CARD_WIDTH)
 
         self.note_title_label = ttk.Label(note_section, text="커밋 메모", style="Section.TLabel")
         self.note_title_label.grid(row=0, column=0, sticky="w", pady=(0, 6))
@@ -523,7 +550,7 @@ class LineTrackerApp:
         self.note_title_text_label = ttk.Label(note_card, text="제목", style="CardLabel.TLabel")
         self.note_title_text_label.grid(row=0, column=0, sticky="w")
 
-        self.note_title_entry = ttk.Entry(note_card, textvariable=self.note_title_var, width=34)
+        self.note_title_entry = ttk.Entry(note_card, textvariable=self.note_title_var, width=44)
         self.note_title_entry.grid(row=1, column=0, sticky="ew", pady=(4, 6))
 
         self.note_done_label = ttk.Label(note_card, text="DONE", style="CardLabel.TLabel")
@@ -532,7 +559,7 @@ class LineTrackerApp:
         self.note_done_text = tk.Text(
             note_card,
             height=8,
-            width=34,
+            width=42,
             font=FONT_BODY,
             bg=COLOR_CARD,
             fg=COLOR_TEXT,
@@ -552,7 +579,7 @@ class LineTrackerApp:
         self.note_todo_text = tk.Text(
             note_card,
             height=12,
-            width=34,
+            width=42,
             font=FONT_BODY,
             bg=COLOR_CARD,
             fg=COLOR_TEXT,
@@ -673,7 +700,7 @@ class LineTrackerApp:
         self.status_label = ttk.Label(footer_left, textvariable=self.status_var, style="Muted.TLabel")
         self.status_label.grid(row=0, column=0, sticky="w")
 
-        self.loading_var = tk.StringVar(value="새로고침 중...")
+        self.loading_var = tk.StringVar(value=" ")
         self.loading_label = ttk.Label(footer_left, textvariable=self.loading_var, style="Muted.TLabel")
         self.loading_bar = ttk.Progressbar(
             footer_left,
@@ -683,7 +710,6 @@ class LineTrackerApp:
         )
         self.loading_label.grid(row=1, column=0, sticky="w", pady=(6, 0))
         self.loading_bar.grid(row=1, column=1, sticky="w", padx=(6, 0), pady=(6, 0))
-        self.loading_label.grid_remove()
         self.loading_bar.grid_remove()
 
         self.refresh_button = ttk.Button(footer_right, text="새로고침", command=self.refresh, style="Accent.TButton")
@@ -807,6 +833,7 @@ class LineTrackerApp:
             "note_done": note_done,
             "note_todo": note_todo,
             "auto_stage": self.auto_stage_var.get() if hasattr(self, "auto_stage_var") else False,
+            "repo_path": str(self.repo),
             "geometry": self.root.winfo_geometry(),
         }
         try:
@@ -898,15 +925,14 @@ class LineTrackerApp:
 
     def set_loading_state(self, loading: bool) -> None:
         if loading:
-            self.loading_label.grid()
+            self.loading_var.set("새로고침 중...")
             self.loading_bar.grid()
             self.loading_bar.start(10)
             self.refresh_button.configure(state="disabled")
-            self.status_var.set("새로고침 중...")
             return
 
         self.loading_bar.stop()
-        self.loading_label.grid_remove()
+        self.loading_var.set(" ")
         self.loading_bar.grid_remove()
         self.refresh_button.configure(state="normal")
 
@@ -1209,6 +1235,9 @@ class LineTrackerApp:
     def on_author_select(self, _: tk.Event) -> None:
         self.apply_author()
 
+    def on_repo_entry_enter(self, _: tk.Event) -> None:
+        self.apply_repo_path()
+
     @staticmethod
     def _normalize_bullets(lines: Iterable[str]) -> list[str]:
         cleaned: list[str] = []
@@ -1328,6 +1357,47 @@ class LineTrackerApp:
             self.author_raw = self.author_filter_map[raw_input]
         else:
             self.author_raw = raw_input
+        self.author = resolve_author(self.repo, self.author_raw)
+        clear_cache_for_repo(self.repo)
+        self.save_settings()
+        self.refresh()
+
+    def browse_repo(self) -> None:
+        start_dir = self.repo_entry_var.get().strip() or str(self.repo)
+        selected = filedialog.askdirectory(
+            title="리포 선택",
+            initialdir=start_dir if Path(start_dir).exists() else None,
+        )
+        if not selected:
+            return
+        self.repo_entry_var.set(selected)
+        self.apply_repo_path()
+
+    def apply_repo_path(self) -> None:
+        raw_input = self.repo_entry_var.get().strip()
+        if not raw_input:
+            return
+        path = Path(raw_input).expanduser()
+        if not path.exists():
+            messagebox.showerror("Line Tracker Error", "리포 경로가 존재하지 않습니다.")
+            return
+        repo = find_repo_root(path).resolve()
+        try:
+            run_git(repo, ["rev-parse", "--is-inside-work-tree"])
+        except RuntimeError:
+            messagebox.showerror("Line Tracker Error", "유효한 Git 리포가 아닙니다.")
+            return
+        if repo == self.repo:
+            return
+        self.repo = repo
+        self.repo_entry_var.set(str(self.repo))
+        self.ref = "auto"
+        self.author_options, self.author_filter_map = self.build_author_options()
+        self.author_combo.configure(values=self.author_options)
+        if self.author_display not in self.author_filter_map:
+            self.author_display = "자동(내 계정)"
+            self.author_raw = "auto"
+            self.author_entry_var.set(self.author_display)
         self.author = resolve_author(self.repo, self.author_raw)
         clear_cache_for_repo(self.repo)
         self.save_settings()
