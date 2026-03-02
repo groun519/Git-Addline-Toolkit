@@ -1,0 +1,16 @@
+{
+  "goal": 30000,
+  "custom_today_enabled": false,
+  "custom_today": "2026-03-01",
+  "graph_days": "30",
+  "auto_refresh": true,
+  "notify_on_goal": true,
+  "last_notify_date": "2026-03-02",
+  "author": "groun519\\ <groun519@gmail\\.com>",
+  "author_display": "groun519 <groun519@gmail.com>",
+  "note_title": "Todo Destroy 1",
+  "note_done": "",
+  "note_todo": "",
+  "auto_stage": false,
+  "geometry": "1x1+0+0"
+}
