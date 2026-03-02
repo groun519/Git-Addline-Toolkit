@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import calendar
 import datetime as dt
 import json
 import math
@@ -46,7 +47,153 @@ GRAPH_CANVAS_HEIGHT = 140
 BAR_LENGTH = 420
 GRAPH_CARD_WIDTH = GRAPH_CANVAS_WIDTH + 24
 NOTE_CARD_WIDTH = 420
+BASE_WINDOW_WIDTH = 1440
+BASE_WINDOW_HEIGHT = 675
+MIN_WINDOW_HEIGHT = 675
+BASE_TILE_MIN_WIDTH = 250
+BASE_TILE_LABEL_WRAP = 240
 SETTINGS_FILE_NAME = "line_tracker_ui_settings.json"
+
+LANG_OPTIONS = {"한국어": "ko", "English": "en"}
+LANG_DISPLAY = {"ko": "한국어", "en": "English"}
+TEXT = {
+    "ko": {
+        "window_title": "Line Tracker",
+        "lang_label": "언어",
+        "repo_label": "리포 경로",
+        "repo_select": "리포 선택",
+        "graph_title": "일별 추가줄 그래프",
+        "graph_period": "기간",
+        "commit_memo": "커밋 메모",
+        "memo_title": "제목",
+        "memo_items": "항목",
+        "add_item": "추가",
+        "done": "DONE",
+        "todo": "TODO",
+        "auto_stage": "자동 스테이지(git add -A)",
+        "save_memo": "메모 저장",
+        "commit": "커밋",
+        "settings": "설정",
+        "custom_date": "날짜 커스텀(YYYY-MM-DD)",
+        "apply_date": "날짜 적용",
+        "goal_label": "목표 줄수",
+        "apply_goal": "목표 적용",
+        "author_label": "저자 선택",
+        "apply_author": "저자 적용",
+        "author_auto": "자동(내 계정)",
+        "author_all": "전체",
+        "auto_refresh": "1분마다 자동 업데이트",
+        "notify_goal": "일일 목표 달성 알림",
+        "progress": "진행률",
+        "overall_progress": "전체 진행률",
+        "daily_progress": "일일 진행률",
+        "current_changes": "현재 변경",
+        "refresh": "새로고침",
+        "copy": "복사",
+        "loading": "새로고침 중...",
+        "status_updated": "업데이트: {time}",
+        "status_auto_suffix": " (자동 1분 ON)",
+        "status_clipboard": "클립보드에 복사됨",
+        "status_commit_start": "커밋 중...",
+        "status_commit_ok": "커밋 완료",
+        "status_commit_fail": "커밋 실패",
+        "status_error": "오류 발생",
+        "status_auto_off": "자동 업데이트 OFF",
+        "notify_on": "일일 목표 알림 ON",
+        "notify_off": "일일 목표 알림 OFF",
+        "toast_title": "일일 목표 달성",
+        "toast_message": "{date} {target}줄 달성 (현재 {done}줄)",
+        "error_date_format": "날짜 형식은 YYYY-MM-DD 로 입력하세요.",
+        "error_goal": "목표 줄수는 1 이상의 정수로 입력하세요.",
+        "error_repo_missing": "리포 경로가 존재하지 않습니다.",
+        "error_repo_invalid": "유효한 Git 리포가 아닙니다.",
+        "error_need_title": "제목을 입력하세요.",
+        "today_label": "오늘 날짜",
+        "days_left_label": "남은 날짜({month})",
+        "day_suffix": "일",
+        "daily_required_label": "일일 필요 추가줄",
+        "after_commit_prefix": "커밋 후",
+        "after_commit_daily_label": "커밋 후 일일 필요 추가줄",
+        "per_day_suffix": "줄/일",
+        "current_uncommitted_label": "현재 추가줄(미커밋)",
+        "lines_suffix": "줄",
+        "branch_only_label": "현재 브랜치 단독 추가줄(커밋)",
+        "share_label": "내 추가줄 비중(전체 대비)",
+        "progress_breakdown": "메인 {main} + 브랜치 {branch} + 미커밋 {uncommitted}",
+        "overall_progress_text": "전체 진행률(커밋+미커밋): {current}/{goal} ({percent}%)\n{breakdown}",
+        "daily_progress_text": "일일 진행률: {done}/{target} ({percent}%)",
+        "graph_summary": "최근 {days}일 평균 {avg}줄/일 | 최대 {max}줄",
+        "repo_dialog_title": "리포 선택",
+    },
+    "en": {
+        "window_title": "Line Tracker",
+        "lang_label": "Language",
+        "repo_label": "Repository",
+        "repo_select": "Browse",
+        "graph_title": "Daily Additions Graph",
+        "graph_period": "Range",
+        "commit_memo": "Commit Memo",
+        "memo_title": "Title",
+        "memo_items": "Items",
+        "add_item": "Add",
+        "done": "DONE",
+        "todo": "TODO",
+        "auto_stage": "Auto stage (git add -A)",
+        "save_memo": "Save Memo",
+        "commit": "Commit",
+        "settings": "Settings",
+        "custom_date": "Custom Date (YYYY-MM-DD)",
+        "apply_date": "Apply Date",
+        "goal_label": "Goal Lines",
+        "apply_goal": "Apply Goal",
+        "author_label": "Author",
+        "apply_author": "Apply Author",
+        "author_auto": "Auto (me)",
+        "author_all": "All",
+        "auto_refresh": "Auto refresh (1 min)",
+        "notify_goal": "Daily goal notification",
+        "progress": "Progress",
+        "overall_progress": "Overall Progress",
+        "daily_progress": "Daily Progress",
+        "current_changes": "Current Changes",
+        "refresh": "Refresh",
+        "copy": "Copy",
+        "loading": "Refreshing...",
+        "status_updated": "Updated: {time}",
+        "status_auto_suffix": " (auto 1 min ON)",
+        "status_clipboard": "Copied to clipboard",
+        "status_commit_start": "Committing...",
+        "status_commit_ok": "Commit complete",
+        "status_commit_fail": "Commit failed",
+        "status_error": "Error",
+        "status_auto_off": "Auto refresh OFF",
+        "notify_on": "Daily goal notify ON",
+        "notify_off": "Daily goal notify OFF",
+        "toast_title": "Daily Goal Reached",
+        "toast_message": "{date} reached {target} lines (now {done})",
+        "error_date_format": "Date must be YYYY-MM-DD.",
+        "error_goal": "Goal lines must be a positive integer.",
+        "error_repo_missing": "Repository path does not exist.",
+        "error_repo_invalid": "Not a valid Git repository.",
+        "error_need_title": "Please enter a title.",
+        "today_label": "Today",
+        "days_left_label": "Days left ({month})",
+        "day_suffix": " days",
+        "daily_required_label": "Daily required additions",
+        "after_commit_prefix": "After commit",
+        "after_commit_daily_label": "Daily required (after commit)",
+        "per_day_suffix": " lines/day",
+        "current_uncommitted_label": "Current additions (uncommitted)",
+        "lines_suffix": " lines",
+        "branch_only_label": "Current branch additions (committed)",
+        "share_label": "My additions share",
+        "progress_breakdown": "Main {main} + Branch {branch} + Uncommitted {uncommitted}",
+        "overall_progress_text": "Overall progress (committed+uncommitted): {current}/{goal} ({percent}%)\n{breakdown}",
+        "daily_progress_text": "Daily progress: {done}/{target} ({percent}%)",
+        "graph_summary": "Last {days} days avg {avg} lines/day | max {max} lines",
+        "repo_dialog_title": "Select Repository",
+    },
+}
 
 COLOR_BG = "#151a18"
 COLOR_CARD = "#1f2522"
@@ -135,6 +282,9 @@ class LineTrackerApp:
         self.settings_path = Path(__file__).resolve().with_name(SETTINGS_FILE_NAME)
         self.settings = self.load_settings()
         saved_repo_path = str(self.settings.get("repo_path", "")).strip()
+        saved_lang = str(self.settings.get("lang", "ko")).strip()
+        self.lang = saved_lang if saved_lang in TEXT else "ko"
+        self.lang_var = tk.StringVar(value=LANG_DISPLAY[self.lang])
         if saved_repo_path and Path(saved_repo_path).exists():
             repo_seed = Path(saved_repo_path)
         else:
@@ -155,9 +305,9 @@ class LineTrackerApp:
         self.today = args.today
         self.month_end = args.month_end
         saved_geometry = str(self.settings.get("geometry", "")).strip()
-        default_width = 1385
-        default_height = 705
-        min_height = 670
+        default_width = BASE_WINDOW_WIDTH
+        default_height = BASE_WINDOW_HEIGHT
+        min_height = MIN_WINDOW_HEIGHT
         width = default_width
         height = default_height
         if saved_geometry:
@@ -175,6 +325,8 @@ class LineTrackerApp:
                 width = default_width
         self.root.geometry(f"{width}x{height}")
         self.root.minsize(default_width, min_height)
+        self.base_window_width = BASE_WINDOW_WIDTH
+        self.min_height = min_height
 
         saved_goal = self._coerce_positive_int(self.settings.get("goal"), self.goal)
         saved_graph_days = str(self.settings.get("graph_days", "14"))
@@ -191,11 +343,14 @@ class LineTrackerApp:
         saved_note_title = str(self.settings.get("note_title", "")).strip()
         saved_note_done = str(self.settings.get("note_done", ""))
         saved_note_todo = str(self.settings.get("note_todo", ""))
+        saved_note_items = self.settings.get("note_items")
         saved_auto_stage = bool(self.settings.get("auto_stage", False))
 
         self.goal = saved_goal
         self.author_options, self.author_filter_map = self.build_author_options()
-        display_value = saved_author_display or self.map_author_to_display(saved_author or args.author)
+        display_value = saved_author_display if saved_author_display in self.author_filter_map else ""
+        if not display_value:
+            display_value = self.map_author_to_display(saved_author or args.author)
         self.author_raw = self.author_filter_map.get(display_value, saved_author or args.author)
         self.author_display = display_value
         self.author = resolve_author(self.repo, self.author_raw)
@@ -304,8 +459,11 @@ class LineTrackerApp:
         self.main_total_committed = 0
         self.branch_total_committed = 0
         self.note_title_var = tk.StringVar(value=saved_note_title)
-        self.note_done_initial = saved_note_done
-        self.note_todo_initial = saved_note_todo
+        self.note_items = self._coerce_note_items(saved_note_items)
+        if not self.note_items:
+            self.note_items = self._legacy_notes_to_items(saved_note_done, saved_note_todo)
+        self.note_item_vars: list[tk.BooleanVar] = []
+        self.note_item_entry_var = tk.StringVar(value="")
         self.auto_stage_var = tk.BooleanVar(value=saved_auto_stage)
         self.repo_entry_var = tk.StringVar(value=str(self.repo))
 
@@ -314,7 +472,7 @@ class LineTrackerApp:
         header_frame.columnconfigure(2, weight=1)
         accent_bar = tk.Frame(header_frame, bg=COLOR_ACCENT, width=6, height=34)
         accent_bar.grid(row=0, column=0, rowspan=2, sticky="ns", padx=(0, 10))
-        self.title_label = ttk.Label(header_frame, text="Line Tracker", style="Title.TLabel")
+        self.title_label = ttk.Label(header_frame, text=self.t("window_title"), style="Title.TLabel")
         self.title_label.grid(row=0, column=1, sticky="w")
         self.subtitle_label = ttk.Label(
             header_frame,
@@ -323,18 +481,38 @@ class LineTrackerApp:
         )
         self.subtitle_label.grid(row=1, column=1, sticky="w", pady=(2, 0))
 
-        repo_header = ttk.Frame(header_frame, style="App.TFrame")
-        repo_header.grid(row=0, column=2, rowspan=2, sticky="e", padx=(20, 0))
+        right_header = ttk.Frame(header_frame, style="App.TFrame")
+        right_header.grid(row=0, column=2, rowspan=2, sticky="e")
+        right_header.columnconfigure(1, weight=1)
+
+        lang_header = ttk.Frame(right_header, style="App.TFrame")
+        lang_header.grid(row=0, column=0, rowspan=2, sticky="w", padx=(0, 10))
+
+        self.lang_label = ttk.Label(lang_header, text=self.t("lang_label"), style="Subtitle.TLabel")
+        self.lang_label.grid(row=0, column=0, sticky="w", pady=(0, 2))
+
+        self.lang_combo = ttk.Combobox(
+            lang_header,
+            textvariable=self.lang_var,
+            values=list(LANG_OPTIONS.keys()),
+            width=10,
+            state="readonly",
+        )
+        self.lang_combo.grid(row=1, column=0, sticky="w")
+        self.lang_combo.bind("<<ComboboxSelected>>", self.on_language_select)
+
+        repo_header = ttk.Frame(right_header, style="App.TFrame")
+        repo_header.grid(row=0, column=1, rowspan=2, sticky="e")
         repo_header.columnconfigure(0, weight=1)
 
-        repo_header_label = ttk.Label(repo_header, text="리포 경로", style="Subtitle.TLabel")
-        repo_header_label.grid(row=0, column=0, sticky="w", pady=(0, 2))
+        self.repo_header_label = ttk.Label(repo_header, text=self.t("repo_label"), style="Subtitle.TLabel")
+        self.repo_header_label.grid(row=0, column=0, sticky="w", pady=(0, 2))
 
         self.repo_entry = ttk.Entry(repo_header, textvariable=self.repo_entry_var, width=52)
         self.repo_entry.grid(row=1, column=0, sticky="ew")
         self.repo_entry.bind("<Return>", self.on_repo_entry_enter)
 
-        self.repo_apply_button = ttk.Button(repo_header, text="리포 선택", command=self.browse_repo)
+        self.repo_apply_button = ttk.Button(repo_header, text=self.t("repo_select"), command=self.browse_repo)
         self.repo_apply_button.grid(row=1, column=1, sticky="e", padx=(8, 0))
 
         output_section = ttk.Frame(container, style="App.TFrame")
@@ -357,10 +535,11 @@ class LineTrackerApp:
             value = ttk.Label(chip, textvariable=self.meta_value_vars[idx], style="ChipValue.TLabel")
             value.grid(row=0, column=1, sticky="w", padx=(6, 0))
 
-        tile_grid = ttk.Frame(output_section, style="App.TFrame")
-        tile_grid.grid(row=1, column=0, sticky="ew")
-        tile_grid.columnconfigure(0, weight=1, uniform="tile")
-        tile_grid.columnconfigure(1, weight=1, uniform="tile")
+        self.tile_grid = ttk.Frame(output_section, style="App.TFrame")
+        self.tile_grid.grid(row=1, column=0, sticky="ew")
+        tile_min_width = BASE_TILE_MIN_WIDTH
+        self.tile_grid.columnconfigure(0, weight=1, uniform="tile", minsize=tile_min_width)
+        self.tile_grid.columnconfigure(1, weight=1, uniform="tile", minsize=tile_min_width)
 
         tile_accents = [
             COLOR_ACCENT2,
@@ -376,9 +555,11 @@ class LineTrackerApp:
             (1, 1, 1),
             (2, 0, 2),
         ]
+        self.tile_label_widgets: list[ttk.Label] = []
+        tile_wrap = BASE_TILE_LABEL_WRAP
         for idx in range(5):
             row, col, colspan = tile_positions[idx]
-            tile = ttk.Frame(tile_grid, style="Tile.TFrame", padding=(10, 8))
+            tile = ttk.Frame(self.tile_grid, style="Tile.TFrame", padding=(10, 8))
             tile.grid(
                 row=row,
                 column=col,
@@ -392,8 +573,14 @@ class LineTrackerApp:
             accent = tk.Frame(tile, bg=tile_accents[idx], width=4)
             accent.grid(row=0, column=0, rowspan=2, sticky="ns", padx=(0, 8))
 
-            label = ttk.Label(tile, textvariable=self.tile_label_vars[idx], style="TileLabel.TLabel", wraplength=200)
+            label = ttk.Label(
+                tile,
+                textvariable=self.tile_label_vars[idx],
+                style="TileLabel.TLabel",
+                wraplength=tile_wrap,
+            )
             label.grid(row=0, column=1, sticky="w")
+            self.tile_label_widgets.append(label)
 
             value = ttk.Label(tile, textvariable=self.tile_value_vars[idx], style="TileValue.TLabel")
             value.grid(row=1, column=1, sticky="w", pady=(2, 0))
@@ -402,7 +589,7 @@ class LineTrackerApp:
         delta_card.grid(row=2, column=0, sticky="ew", pady=(10, 0))
         delta_card.columnconfigure(1, weight=1)
 
-        self.delta_label = ttk.Label(delta_card, text="현재 변경", style="CardTitle.TLabel")
+        self.delta_label = ttk.Label(delta_card, text=self.t("current_changes"), style="CardTitle.TLabel")
         self.delta_label.grid(row=0, column=0, sticky="w")
 
         self.delta_value_frame = ttk.Frame(delta_card, style="CardInner.TFrame")
@@ -437,13 +624,13 @@ class LineTrackerApp:
         progress_section.grid(row=2, column=0, sticky="ew", padx=(0, 10), pady=(10, 0))
         progress_section.columnconfigure(0, weight=1)
 
-        self.progress_title = ttk.Label(progress_section, text="진행률", style="Section.TLabel")
+        self.progress_title = ttk.Label(progress_section, text=self.t("progress"), style="Section.TLabel")
         self.progress_title.grid(row=0, column=0, sticky="w", pady=(0, 6))
 
         progress_card = ttk.Frame(progress_section, style="Card.TFrame", padding=(12, 10))
         progress_card.grid(row=1, column=0, sticky="ew")
 
-        self.overall_progress_title = ttk.Label(progress_card, text="전체 진행률", style="CardTitle.TLabel")
+        self.overall_progress_title = ttk.Label(progress_card, text=self.t("overall_progress"), style="CardTitle.TLabel")
         self.overall_progress_title.grid(row=0, column=0, sticky="w")
 
         self.overall_progress_var = tk.DoubleVar(value=0.0)
@@ -466,7 +653,7 @@ class LineTrackerApp:
         )
         self.overall_progress_text_label.grid(row=2, column=0, sticky="w", pady=(4, 0))
 
-        self.daily_progress_title = ttk.Label(progress_card, text="일일 진행률", style="CardTitle.TLabel")
+        self.daily_progress_title = ttk.Label(progress_card, text=self.t("daily_progress"), style="CardTitle.TLabel")
         self.daily_progress_title.grid(row=3, column=0, sticky="w", pady=(12, 0))
 
         self.daily_progress_var = tk.DoubleVar(value=0.0)
@@ -502,11 +689,11 @@ class LineTrackerApp:
         graph_header.grid(row=0, column=0, sticky="ew", pady=(0, 6))
         graph_header.columnconfigure(0, weight=1)
 
-        self.graph_title = ttk.Label(graph_header, text="일별 추가줄 그래프", style="Section.TLabel")
+        self.graph_title = ttk.Label(graph_header, text=self.t("graph_title"), style="Section.TLabel")
         self.graph_title.grid(row=0, column=0, sticky="w")
 
         self.graph_days_var = tk.StringVar(value=saved_graph_days)
-        self.graph_days_label = ttk.Label(graph_header, text="기간", style="Muted.TLabel")
+        self.graph_days_label = ttk.Label(graph_header, text=self.t("graph_period"), style="Muted.TLabel")
         self.graph_days_label.grid(row=0, column=1, sticky="e", padx=(8, 4))
 
         self.graph_days_combo = ttk.Combobox(
@@ -540,76 +727,85 @@ class LineTrackerApp:
         note_section.grid(row=0, column=1, rowspan=2, sticky="nw", padx=(10, 0))
         note_section.columnconfigure(0, weight=1, minsize=NOTE_CARD_WIDTH)
 
-        self.note_title_label = ttk.Label(note_section, text="커밋 메모", style="Section.TLabel")
+        self.note_title_label = ttk.Label(note_section, text=self.t("commit_memo"), style="Section.TLabel")
         self.note_title_label.grid(row=0, column=0, sticky="w", pady=(0, 6))
 
         note_card = ttk.Frame(note_section, style="Card.TFrame", padding=(12, 10))
         note_card.grid(row=1, column=0, sticky="ew")
         note_card.columnconfigure(0, weight=1)
 
-        self.note_title_text_label = ttk.Label(note_card, text="제목", style="CardLabel.TLabel")
+        self.note_title_text_label = ttk.Label(note_card, text=self.t("memo_title"), style="CardLabel.TLabel")
         self.note_title_text_label.grid(row=0, column=0, sticky="w")
 
         self.note_title_entry = ttk.Entry(note_card, textvariable=self.note_title_var, width=44)
         self.note_title_entry.grid(row=1, column=0, sticky="ew", pady=(4, 6))
 
-        self.note_done_label = ttk.Label(note_card, text="DONE", style="CardLabel.TLabel")
-        self.note_done_label.grid(row=2, column=0, sticky="w")
+        self.note_items_label = ttk.Label(note_card, text=self.t("memo_items"), style="CardLabel.TLabel")
+        self.note_items_label.grid(row=2, column=0, sticky="w")
 
-        self.note_done_text = tk.Text(
-            note_card,
-            height=8,
-            width=42,
-            font=FONT_BODY,
+        items_entry_row = ttk.Frame(note_card, style="CardInner.TFrame")
+        items_entry_row.grid(row=3, column=0, sticky="ew", pady=(4, 6))
+        items_entry_row.columnconfigure(0, weight=1)
+
+        self.note_item_entry = ttk.Entry(items_entry_row, textvariable=self.note_item_entry_var)
+        self.note_item_entry.grid(row=0, column=0, sticky="ew")
+        self.note_item_entry.bind("<Return>", self.on_note_item_enter)
+
+        self.note_item_add_button = ttk.Button(
+            items_entry_row,
+            text=self.t("add_item"),
+            command=self.add_note_item,
+        )
+        self.note_item_add_button.grid(row=0, column=1, sticky="e", padx=(8, 0))
+
+        items_list_frame = ttk.Frame(note_card, style="CardInner.TFrame")
+        items_list_frame.grid(row=4, column=0, sticky="ew", pady=(0, 8))
+        items_list_frame.columnconfigure(0, weight=1)
+
+        self.note_items_canvas = tk.Canvas(
+            items_list_frame,
+            height=240,
             bg=COLOR_CARD,
-            fg=COLOR_TEXT,
-            insertbackground=COLOR_TEXT,
-            relief="solid",
-            bd=1,
             highlightthickness=1,
             highlightbackground=COLOR_BORDER,
         )
-        self.note_done_text.grid(row=3, column=0, sticky="ew", pady=(4, 6))
-        if self.note_done_initial:
-            self.note_done_text.insert("1.0", self.note_done_initial)
+        self.note_items_canvas.grid(row=0, column=0, sticky="ew")
 
-        self.note_todo_label = ttk.Label(note_card, text="TODO", style="CardLabel.TLabel")
-        self.note_todo_label.grid(row=4, column=0, sticky="w")
-
-        self.note_todo_text = tk.Text(
-            note_card,
-            height=12,
-            width=42,
-            font=FONT_BODY,
-            bg=COLOR_CARD,
-            fg=COLOR_TEXT,
-            insertbackground=COLOR_TEXT,
-            relief="solid",
-            bd=1,
-            highlightthickness=1,
-            highlightbackground=COLOR_BORDER,
+        self.note_items_scroll = ttk.Scrollbar(
+            items_list_frame,
+            orient="vertical",
+            command=self.note_items_canvas.yview,
         )
-        self.note_todo_text.grid(row=5, column=0, sticky="ew", pady=(4, 8))
-        if self.note_todo_initial:
-            self.note_todo_text.insert("1.0", self.note_todo_initial)
+        self.note_items_scroll.grid(row=0, column=1, sticky="ns", padx=(6, 0))
+        self.note_items_canvas.configure(yscrollcommand=self.note_items_scroll.set)
+
+        self.note_items_inner = ttk.Frame(self.note_items_canvas, style="CardInner.TFrame")
+        self.note_items_window = self.note_items_canvas.create_window(
+            (0, 0),
+            window=self.note_items_inner,
+            anchor="nw",
+        )
+        self.note_items_inner.bind("<Configure>", self._on_note_items_configure)
+        self.note_items_canvas.bind("<Configure>", self._on_note_items_canvas_configure)
 
         self.auto_stage_check = ttk.Checkbutton(
             note_card,
-            text="자동 스테이지(git add -A)",
+            text=self.t("auto_stage"),
             variable=self.auto_stage_var,
             command=self.save_settings,
         )
-        self.auto_stage_check.grid(row=6, column=0, sticky="w", pady=(0, 6))
+        self.auto_stage_check.grid(row=5, column=0, sticky="w", pady=(0, 6))
 
         note_actions = ttk.Frame(note_card, style="Card.TFrame")
-        note_actions.grid(row=7, column=0, sticky="e")
+        note_actions.grid(row=6, column=0, sticky="e")
 
-        self.note_save_button = ttk.Button(note_actions, text="메모 저장", command=self.save_settings)
+        self.note_save_button = ttk.Button(note_actions, text=self.t("save_memo"), command=self.save_settings)
         self.note_save_button.grid(row=0, column=0, sticky="e")
 
-        self.commit_button = ttk.Button(note_actions, text="커밋", command=self.commit_notes, style="Accent.TButton")
+        self.commit_button = ttk.Button(note_actions, text=self.t("commit"), command=self.commit_notes, style="Accent.TButton")
         self.commit_button.grid(row=0, column=1, sticky="e", padx=(8, 0))
 
+        self.render_note_items()
 
         self.custom_today_var = tk.BooleanVar(value=saved_custom_today_enabled)
         self.today_entry_var = tk.StringVar(value=saved_today_text)
@@ -617,7 +813,7 @@ class LineTrackerApp:
         controls_section.grid(row=1, column=0, sticky="ew", padx=(0, 10), pady=(10, 0))
         controls_section.columnconfigure(0, weight=1, minsize=GRAPH_CARD_WIDTH)
 
-        self.controls_title = ttk.Label(controls_section, text="설정", style="Section.TLabel")
+        self.controls_title = ttk.Label(controls_section, text=self.t("settings"), style="Section.TLabel")
         self.controls_title.grid(row=0, column=0, sticky="w", pady=(0, 6))
 
         controls_card = ttk.Frame(controls_section, style="Card.TFrame", padding=(12, 10))
@@ -625,7 +821,7 @@ class LineTrackerApp:
 
         self.custom_today_check = ttk.Checkbutton(
             controls_card,
-            text="날짜 커스텀(YYYY-MM-DD)",
+            text=self.t("custom_date"),
             variable=self.custom_today_var,
             command=self.on_custom_date_toggle,
         )
@@ -637,22 +833,22 @@ class LineTrackerApp:
         self.today_entry.grid(row=1, column=0, sticky="ew", pady=(4, 0))
         self.today_entry.bind("<Return>", self.on_today_entry_enter)
 
-        self.today_apply_button = ttk.Button(controls_card, text="날짜 적용", command=self.apply_custom_date)
+        self.today_apply_button = ttk.Button(controls_card, text=self.t("apply_date"), command=self.apply_custom_date)
         self.today_apply_button.grid(row=1, column=1, sticky="e", padx=(8, 0), pady=(4, 0))
 
         self.goal_entry_var = tk.StringVar(value=str(self.goal))
-        self.goal_label = ttk.Label(controls_card, text="목표 줄수", style="CardLabel.TLabel")
+        self.goal_label = ttk.Label(controls_card, text=self.t("goal_label"), style="CardLabel.TLabel")
         self.goal_label.grid(row=2, column=0, sticky="w", pady=(10, 0))
 
         self.goal_entry = ttk.Entry(controls_card, textvariable=self.goal_entry_var, width=14)
         self.goal_entry.grid(row=3, column=0, sticky="ew", pady=(4, 0))
         self.goal_entry.bind("<Return>", self.on_goal_entry_enter)
 
-        self.goal_apply_button = ttk.Button(controls_card, text="목표 적용", command=self.apply_goal)
+        self.goal_apply_button = ttk.Button(controls_card, text=self.t("apply_goal"), command=self.apply_goal)
         self.goal_apply_button.grid(row=3, column=1, sticky="e", padx=(8, 0), pady=(4, 0))
 
         self.author_entry_var = tk.StringVar(value=self.author_display)
-        self.author_label = ttk.Label(controls_card, text="저자 선택", style="CardLabel.TLabel")
+        self.author_label = ttk.Label(controls_card, text=self.t("author_label"), style="CardLabel.TLabel")
         self.author_label.grid(row=4, column=0, sticky="w", pady=(10, 0))
 
         self.author_combo = ttk.Combobox(
@@ -665,13 +861,13 @@ class LineTrackerApp:
         self.author_combo.bind("<Return>", self.on_author_entry_enter)
         self.author_combo.bind("<<ComboboxSelected>>", self.on_author_select)
 
-        self.author_apply_button = ttk.Button(controls_card, text="저자 적용", command=self.apply_author)
+        self.author_apply_button = ttk.Button(controls_card, text=self.t("apply_author"), command=self.apply_author)
         self.author_apply_button.grid(row=5, column=1, sticky="e", padx=(8, 0), pady=(4, 0))
 
         self.auto_refresh_var = tk.BooleanVar(value=saved_auto_refresh)
         self.auto_refresh_check = ttk.Checkbutton(
             controls_card,
-            text="1분마다 자동 업데이트",
+            text=self.t("auto_refresh"),
             variable=self.auto_refresh_var,
             command=self.on_auto_refresh_toggle,
         )
@@ -679,7 +875,7 @@ class LineTrackerApp:
 
         self.notify_check = ttk.Checkbutton(
             controls_card,
-            text="일일 목표 달성 알림",
+            text=self.t("notify_goal"),
             variable=self.notify_var,
             command=self.on_notify_toggle,
         )
@@ -712,10 +908,10 @@ class LineTrackerApp:
         self.loading_bar.grid(row=1, column=1, sticky="w", padx=(6, 0), pady=(6, 0))
         self.loading_bar.grid_remove()
 
-        self.refresh_button = ttk.Button(footer_right, text="새로고침", command=self.refresh, style="Accent.TButton")
+        self.refresh_button = ttk.Button(footer_right, text=self.t("refresh"), command=self.refresh, style="Accent.TButton")
         self.refresh_button.grid(row=0, column=0, sticky="e")
 
-        self.copy_button = ttk.Button(footer_right, text="복사", command=self.copy_output)
+        self.copy_button = ttk.Button(footer_right, text=self.t("copy"), command=self.copy_output)
         self.copy_button.grid(row=0, column=1, sticky="e", padx=(8, 0))
 
         self.current_output = ""
@@ -727,6 +923,7 @@ class LineTrackerApp:
             except ValueError:
                 self.today_override = args.today
                 self.today_entry_var.set(default_today_text)
+        self.apply_language()
         self.refresh()
         self.save_settings()
 
@@ -752,9 +949,132 @@ class LineTrackerApp:
             return f"{self.repo.name} • {self.ref} + {current}"
         return label
 
+    def t(self, key: str, **kwargs) -> str:
+        text = TEXT.get(self.lang, TEXT["ko"]).get(key, key)
+        try:
+            return text.format(**kwargs)
+        except (KeyError, ValueError):
+            return text
+
+    def format_month_label(self, month: int) -> str:
+        if self.lang == "en":
+            return calendar.month_abbr[month]
+        return f"{month}월"
+
+    def format_output_lines(self, result: TrackerResult) -> list[str]:
+        month_label = self.format_month_label(result.month_end.month)
+        return [
+            f"- {self.t('today_label')}: {result.today.isoformat()}",
+            f"- {self.t('days_left_label', month=month_label)}: "
+            f"{result.days_left_including_today}{self.t('day_suffix')}",
+            (
+                f"- {self.t('daily_required_label')}: {result.need_today}{self.t('per_day_suffix')} "
+                f"[{self.t('after_commit_prefix')} {result.need_after_commit}{self.t('per_day_suffix')}]"
+            ),
+            f"- {self.t('current_uncommitted_label')}: {result.uncommitted_insertions}{self.t('lines_suffix')}",
+        ]
+
+    def set_output_lines(self, result: TrackerResult, branch_total: int, share_text: str) -> None:
+        month_label = self.format_month_label(result.month_end.month)
+        self.meta_label_vars[0].set(self.t("today_label"))
+        self.meta_value_vars[0].set(result.today.isoformat())
+        self.meta_label_vars[1].set(self.t("days_left_label", month=month_label))
+        self.meta_value_vars[1].set(f"{result.days_left_including_today}{self.t('day_suffix')}")
+
+        branch_value = f"{branch_total:,}{self.t('lines_suffix')}" if branch_total is not None else ""
+        tiles = [
+            (self.t("daily_required_label"), f"{result.need_today}{self.t('per_day_suffix')}"),
+            (self.t("after_commit_daily_label"), f"{result.need_after_commit}{self.t('per_day_suffix')}"),
+            (self.t("branch_only_label"), branch_value),
+            (self.t("current_uncommitted_label"), f"{result.uncommitted_insertions}{self.t('lines_suffix')}"),
+            (self.t("share_label"), share_text),
+        ]
+
+        for idx in range(5):
+            label, value = tiles[idx] if idx < len(tiles) else ("", "")
+            if idx == 1 and not value:
+                label = ""
+            self.tile_label_vars[idx].set(label)
+            self.tile_value_vars[idx].set(value)
+
+    def apply_language(self) -> None:
+        self.root.title(self.t("window_title"))
+        self.title_label.configure(text=self.t("window_title"))
+        self.lang_label.configure(text=self.t("lang_label"))
+        self.repo_header_label.configure(text=self.t("repo_label"))
+        self.repo_apply_button.configure(text=self.t("repo_select"))
+
+        self.graph_title.configure(text=self.t("graph_title"))
+        self.graph_days_label.configure(text=self.t("graph_period"))
+        self.note_title_label.configure(text=self.t("commit_memo"))
+        self.note_title_text_label.configure(text=self.t("memo_title"))
+        self.note_items_label.configure(text=self.t("memo_items"))
+        self.note_item_add_button.configure(text=self.t("add_item"))
+        self.auto_stage_check.configure(text=self.t("auto_stage"))
+        self.note_save_button.configure(text=self.t("save_memo"))
+        self.commit_button.configure(text=self.t("commit"))
+
+        self.controls_title.configure(text=self.t("settings"))
+        self.custom_today_check.configure(text=self.t("custom_date"))
+        self.today_apply_button.configure(text=self.t("apply_date"))
+        self.goal_label.configure(text=self.t("goal_label"))
+        self.goal_apply_button.configure(text=self.t("apply_goal"))
+        self.author_label.configure(text=self.t("author_label"))
+        self.author_apply_button.configure(text=self.t("apply_author"))
+        self.auto_refresh_check.configure(text=self.t("auto_refresh"))
+        self.notify_check.configure(text=self.t("notify_goal"))
+
+        self.progress_title.configure(text=self.t("progress"))
+        self.overall_progress_title.configure(text=self.t("overall_progress"))
+        self.daily_progress_title.configure(text=self.t("daily_progress"))
+        self.delta_label.configure(text=self.t("current_changes"))
+        self.refresh_button.configure(text=self.t("refresh"))
+        self.copy_button.configure(text=self.t("copy"))
+        self.apply_layout_for_language()
+
+        self.author_options, self.author_filter_map = self.build_author_options()
+        self.author_combo.configure(values=self.author_options)
+        self.author_display = self.map_author_to_display(self.author_raw)
+        self.author_entry_var.set(self.author_display)
+
+        if self.refresh_in_progress:
+            self.loading_var.set(self.t("loading"))
+        else:
+            self.loading_var.set(" ")
+
+    def on_language_select(self, _: tk.Event) -> None:
+        self.lang = LANG_OPTIONS.get(self.lang_var.get(), "ko")
+        self.apply_language()
+        self.save_settings()
+        self.refresh()
+
+    def apply_layout_for_language(self) -> None:
+        tile_min_width = BASE_TILE_MIN_WIDTH
+        tile_wrap = BASE_TILE_LABEL_WRAP
+        if hasattr(self, "tile_grid"):
+            self.tile_grid.columnconfigure(0, minsize=tile_min_width)
+            self.tile_grid.columnconfigure(1, minsize=tile_min_width)
+        for label in getattr(self, "tile_label_widgets", []):
+            label.configure(wraplength=tile_wrap)
+
+        default_width = BASE_WINDOW_WIDTH
+        min_height = getattr(self, "min_height", MIN_WINDOW_HEIGHT)
+        self.root.minsize(default_width, min_height)
+        try:
+            current = self.root.winfo_geometry().split("+", 1)[0]
+            w_str, h_str = current.split("x", 1)
+            width = int(w_str)
+            height = int(h_str)
+        except (ValueError, IndexError):
+            return
+        if width < default_width:
+            self.root.geometry(f"{default_width}x{height}")
+
     def build_author_options(self) -> tuple[list[str], dict[str, str]]:
-        options = ["자동(내 계정)", "전체"]
-        mapping = {"자동(내 계정)": "auto", "전체": ""}
+        auto_label = self.t("author_auto")
+        all_label = self.t("author_all")
+        options = [auto_label, all_label]
+        mapping = {auto_label: "auto", all_label: ""}
         try:
             out = run_git(self.repo, ["shortlog", "-sne", "--all"])
         except RuntimeError:
@@ -780,9 +1100,9 @@ class LineTrackerApp:
 
     def map_author_to_display(self, author_raw: str) -> str:
         if not author_raw:
-            return "전체"
+            return self.t("author_all")
         if author_raw.lower() == "auto":
-            return "자동(내 계정)"
+            return self.t("author_auto")
         for display, filt in self.author_filter_map.items():
             if filt == author_raw:
                 return display
@@ -813,12 +1133,12 @@ class LineTrackerApp:
 
     def save_settings(self) -> None:
         note_title = self.note_title_var.get().strip() if hasattr(self, "note_title_var") else ""
-        note_done = ""
-        note_todo = ""
-        if hasattr(self, "note_done_text"):
-            note_done = self.note_done_text.get("1.0", "end-1c")
-        if hasattr(self, "note_todo_text"):
-            note_todo = self.note_todo_text.get("1.0", "end-1c")
+        note_items: list[dict[str, object]] = []
+        if hasattr(self, "note_items"):
+            for entry in self.note_items:
+                text = str(entry.get("text", "")).strip()
+                if text:
+                    note_items.append({"text": text, "done": bool(entry.get("done"))})
         data = {
             "goal": self.goal,
             "custom_today_enabled": self.custom_today_var.get(),
@@ -830,10 +1150,10 @@ class LineTrackerApp:
             "author": self.author_raw,
             "author_display": self.author_display,
             "note_title": note_title,
-            "note_done": note_done,
-            "note_todo": note_todo,
+            "note_items": note_items,
             "auto_stage": self.auto_stage_var.get() if hasattr(self, "auto_stage_var") else False,
             "repo_path": str(self.repo),
+            "lang": self.lang,
             "geometry": self.root.winfo_geometry(),
         }
         try:
@@ -845,77 +1165,20 @@ class LineTrackerApp:
             # UI 동작은 계속 유지하고, 저장 실패만 무시한다.
             pass
 
-    def set_output_lines(
-        self,
-        lines: list[str],
-        branch_total: int | None = None,
-        share_text: str = "",
-    ) -> None:
-        def split_line(raw: str) -> tuple[str, str]:
-            text = raw.strip()
-            if text.startswith("-"):
-                text = text[1:].strip()
-            if ":" in text:
-                label, value = text.split(":", 1)
-                return label.strip(), value.strip()
-            return text, ""
-
-        meta_lines = lines[:2]
-        daily_line = lines[2] if len(lines) > 2 else ""
-        current_line = lines[3] if len(lines) > 3 else ""
-
-        for idx in range(2):
-            if idx < len(meta_lines):
-                label, value = split_line(meta_lines[idx])
-            else:
-                label, value = "", ""
-            self.meta_label_vars[idx].set(label)
-            self.meta_value_vars[idx].set(value)
-
-        daily_label, daily_value_raw = split_line(daily_line)
-        commit_value = ""
-        daily_value = daily_value_raw
-        if "[" in daily_value_raw and "]" in daily_value_raw:
-            before, bracket = daily_value_raw.split("[", 1)
-            daily_value = before.strip()
-            bracket_text = bracket.split("]", 1)[0].strip()
-            if bracket_text.startswith("커밋 후"):
-                commit_value = bracket_text.replace("커밋 후", "", 1).strip()
-            else:
-                commit_value = bracket_text
-
-        current_label, current_value = split_line(current_line)
-
-        branch_value = f"{branch_total:,}줄" if branch_total is not None else ""
-        tiles = [
-            (daily_label, daily_value),
-            ("커밋 후 일일 필요 추가줄", commit_value),
-            ("현재 브랜치 단독 추가줄(커밋)", branch_value),
-            (current_label, current_value),
-            ("내 추가줄 비중(전체 대비)", share_text),
-        ]
-
-        for idx in range(5):
-            label, value = tiles[idx] if idx < len(tiles) else ("", "")
-            if idx == 1 and not value:
-                label = ""
-            self.tile_label_vars[idx].set(label)
-            self.tile_value_vars[idx].set(value)
-
     def parse_today_entry(self) -> dt.date:
         value = self.today_entry_var.get().strip()
         try:
             return dt.date.fromisoformat(value)
         except ValueError as exc:
-            raise ValueError("날짜 형식은 YYYY-MM-DD 로 입력하세요.") from exc
+            raise ValueError(self.t("error_date_format")) from exc
 
     def parse_goal_entry(self) -> int:
         value = self.goal_entry_var.get().strip().replace(",", "")
         if not value.isdigit():
-            raise ValueError("목표 줄수는 1 이상의 정수로 입력하세요.")
+            raise ValueError(self.t("error_goal"))
         goal = int(value)
         if goal <= 0:
-            raise ValueError("목표 줄수는 1 이상의 정수로 입력하세요.")
+            raise ValueError(self.t("error_goal"))
         return goal
 
     def apply_date_controls_state(self) -> None:
@@ -925,7 +1188,7 @@ class LineTrackerApp:
 
     def set_loading_state(self, loading: bool) -> None:
         if loading:
-            self.loading_var.set("새로고침 중...")
+            self.loading_var.set(self.t("loading"))
             self.loading_bar.grid()
             self.loading_bar.start(10)
             self.refresh_button.configure(state="disabled")
@@ -1059,17 +1322,17 @@ class LineTrackerApp:
         self.branch_total_committed = branch_total
         self.main_total_committed = max(result.committed_total - branch_total, 0)
 
-        lines = format_output_lines(result)  # type: ignore[arg-type]
+        lines = self.format_output_lines(result)  # type: ignore[arg-type]
         self.current_output = "\n".join(lines)
-        self.set_output_lines(lines, branch_total, share_text)
+        self.set_output_lines(result, branch_total, share_text)
         self.delta_added_var.set(f"+{result.uncommitted_insertions:,}")
         self.delta_removed_var.set(f"-{uncommitted_deletions:,}")
         self.update_progress(result, today_done, today_target)  # type: ignore[arg-type]
         self.update_graph(points, result.today, graph_days, graph_avg, graph_max)  # type: ignore[arg-type]
         self.maybe_notify(result, today_done, today_target)  # type: ignore[arg-type]
 
-        status_suffix = " (자동 1분 ON)" if self.auto_refresh_var.get() else ""
-        self.status_var.set(f"업데이트: {dt.datetime.now().strftime('%H:%M:%S')}{status_suffix}")
+        status_suffix = self.t("status_auto_suffix") if self.auto_refresh_var.get() else ""
+        self.status_var.set(self.t("status_updated", time=dt.datetime.now().strftime("%H:%M:%S")) + status_suffix)
         if self.auto_refresh_var.get():
             self.schedule_auto_refresh()
 
@@ -1079,7 +1342,7 @@ class LineTrackerApp:
 
         self.refresh_in_progress = False
         self.set_loading_state(False)
-        self.status_var.set("오류 발생")
+        self.status_var.set(self.t("status_error"))
         messagebox.showerror("Line Tracker Error", error_message)
 
     def copy_output(self) -> None:
@@ -1087,7 +1350,7 @@ class LineTrackerApp:
             return
         self.root.clipboard_clear()
         self.root.clipboard_append(self.current_output)
-        self.status_var.set("클립보드에 복사됨")
+        self.status_var.set(self.t("status_clipboard"))
 
     def update_progress(self, result: TrackerResult, today_done: int, today_target: int) -> None:
         current_total = self.main_total_committed + self.branch_total_committed + result.uncommitted_insertions
@@ -1097,12 +1360,20 @@ class LineTrackerApp:
             overall_percent = (current_total / self.goal) * 100.0
         overall_percent = max(0.0, min(100.0, overall_percent))
         self.overall_progress_var.set(overall_percent)
-        breakdown = (
-            f"메인 {self.main_total_committed:,} + 브랜치 {self.branch_total_committed:,} "
-            f"+ 미커밋 {result.uncommitted_insertions:,}"
+        breakdown = self.t(
+            "progress_breakdown",
+            main=f"{self.main_total_committed:,}",
+            branch=f"{self.branch_total_committed:,}",
+            uncommitted=f"{result.uncommitted_insertions:,}",
         )
         self.overall_progress_text_var.set(
-            f"전체 진행률(커밋+미커밋): {current_total:,}/{self.goal:,} ({overall_percent:.1f}%)\n{breakdown}"
+            self.t(
+                "overall_progress_text",
+                current=f"{current_total:,}",
+                goal=f"{self.goal:,}",
+                percent=f"{overall_percent:.1f}",
+                breakdown=breakdown,
+            )
         )
 
         if today_target <= 0:
@@ -1113,7 +1384,12 @@ class LineTrackerApp:
 
         self.daily_progress_var.set(daily_percent)
         self.daily_progress_text_var.set(
-            f"일일 진행률: {today_done:,}/{today_target:,} ({daily_percent:.1f}%)"
+            self.t(
+                "daily_progress_text",
+                done=f"{today_done:,}",
+                target=f"{today_target:,}",
+                percent=f"{daily_percent:.1f}",
+            )
         )
 
     def update_graph(
@@ -1125,7 +1401,14 @@ class LineTrackerApp:
         max_value: int,
     ) -> None:
         self.draw_daily_graph(points, highlight_day)
-        self.graph_summary_var.set(f"최근 {days}일 평균 {avg_value:.1f}줄/일 | 최대 {max_value:,}줄")
+        self.graph_summary_var.set(
+            self.t(
+                "graph_summary",
+                days=days,
+                avg=f"{avg_value:.1f}",
+                max=f"{max_value:,}",
+            )
+        )
 
     def draw_daily_graph(self, points: list[tuple[dt.date, int]], highlight_day: dt.date) -> None:
         canvas = self.graph_canvas
@@ -1239,6 +1522,89 @@ class LineTrackerApp:
         self.apply_repo_path()
 
     @staticmethod
+    def _strip_bullet(text: str) -> str:
+        cleaned = text.strip()
+        if cleaned.startswith(("-", "*", "•")):
+            return cleaned[1:].lstrip()
+        return cleaned
+
+    def _coerce_note_items(self, raw: object) -> list[dict[str, object]]:
+        items: list[dict[str, object]] = []
+        if isinstance(raw, list):
+            for entry in raw:
+                if isinstance(entry, dict):
+                    text = str(entry.get("text", "")).strip()
+                    if text:
+                        items.append({"text": text, "done": bool(entry.get("done"))})
+                elif isinstance(entry, str):
+                    text = entry.strip()
+                    if text:
+                        items.append({"text": text, "done": False})
+        return items
+
+    def _legacy_notes_to_items(self, done_raw: str, todo_raw: str) -> list[dict[str, object]]:
+        items: list[dict[str, object]] = []
+        for line in done_raw.splitlines():
+            text = self._strip_bullet(line)
+            if text:
+                items.append({"text": text, "done": True})
+        for line in todo_raw.splitlines():
+            text = self._strip_bullet(line)
+            if text:
+                items.append({"text": text, "done": False})
+        return items
+
+    def _on_note_items_configure(self, _: tk.Event) -> None:
+        if hasattr(self, "note_items_canvas"):
+            self.note_items_canvas.configure(scrollregion=self.note_items_canvas.bbox("all"))
+
+    def _on_note_items_canvas_configure(self, event: tk.Event) -> None:
+        if hasattr(self, "note_items_canvas") and hasattr(self, "note_items_window"):
+            self.note_items_canvas.itemconfigure(self.note_items_window, width=event.width)
+
+    def render_note_items(self) -> None:
+        if not hasattr(self, "note_items_inner"):
+            return
+        for child in self.note_items_inner.winfo_children():
+            child.destroy()
+        self.note_item_vars = []
+        for idx, item in enumerate(self.note_items):
+            row = ttk.Frame(self.note_items_inner, style="CardInner.TFrame")
+            row.grid(row=idx, column=0, sticky="ew", pady=(0, 6))
+            row.columnconfigure(0, weight=1)
+
+            var = tk.BooleanVar(value=bool(item.get("done")))
+            self.note_item_vars.append(var)
+            check = ttk.Checkbutton(
+                row,
+                text=str(item.get("text", "")),
+                variable=var,
+                wraplength=NOTE_CARD_WIDTH - 80,
+                command=lambda i=idx, v=var: self.on_note_item_toggle(i, v),
+            )
+            check.grid(row=0, column=0, sticky="w")
+
+    def on_note_item_toggle(self, idx: int, var: tk.BooleanVar) -> None:
+        if 0 <= idx < len(self.note_items):
+            self.note_items[idx]["done"] = bool(var.get())
+            self.save_settings()
+
+    def add_note_item(self) -> None:
+        text = self.note_item_entry_var.get().strip()
+        if not text:
+            return
+        cleaned = self._strip_bullet(text)
+        if not cleaned:
+            return
+        self.note_items.append({"text": cleaned, "done": False})
+        self.note_item_entry_var.set("")
+        self.render_note_items()
+        self.save_settings()
+
+    def on_note_item_enter(self, _: tk.Event) -> None:
+        self.add_note_item()
+
+    @staticmethod
     def _normalize_bullets(lines: Iterable[str]) -> list[str]:
         cleaned: list[str] = []
         for raw in lines:
@@ -1253,17 +1619,23 @@ class LineTrackerApp:
 
     def build_commit_message(self) -> str:
         title = self.note_title_var.get().strip()
-        done_raw = self.note_done_text.get("1.0", "end-1c") if hasattr(self, "note_done_text") else ""
-        todo_raw = self.note_todo_text.get("1.0", "end-1c") if hasattr(self, "note_todo_text") else ""
+        done_lines: list[str] = []
+        todo_lines: list[str] = []
+        for entry in getattr(self, "note_items", []):
+            text = self._strip_bullet(str(entry.get("text", "")))
+            if not text:
+                continue
+            line = f"- {text}"
+            if entry.get("done"):
+                done_lines.append(line)
+            else:
+                todo_lines.append(line)
 
-        done_lines = self._normalize_bullets(done_raw.splitlines())
-        todo_lines = self._normalize_bullets(todo_raw.splitlines())
-
-        parts = [title, "", "DONE"]
+        parts = [title, "", self.t("done")]
         if done_lines:
             parts.extend(done_lines)
         parts.append("")
-        parts.append("TODO")
+        parts.append(self.t("todo"))
         if todo_lines:
             parts.extend(todo_lines)
         return "\n".join(parts).strip() + "\n"
@@ -1271,7 +1643,7 @@ class LineTrackerApp:
     def commit_notes(self) -> None:
         title = self.note_title_var.get().strip()
         if not title:
-            messagebox.showerror("Line Tracker Error", "제목을 입력하세요.")
+            messagebox.showerror("Line Tracker Error", self.t("error_need_title"))
             return
 
         commit_message = self.build_commit_message()
@@ -1306,17 +1678,17 @@ class LineTrackerApp:
                 self.safe_after(lambda e=str(exc): self._on_commit_error(e))
 
         self.commit_button.configure(state="disabled")
-        self.status_var.set("커밋 중...")
+        self.status_var.set(self.t("status_commit_start"))
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_commit_success(self) -> None:
         self.commit_button.configure(state="normal")
-        self.status_var.set("커밋 완료")
+        self.status_var.set(self.t("status_commit_ok"))
         self.refresh()
 
     def _on_commit_error(self, error_message: str) -> None:
         self.commit_button.configure(state="normal")
-        self.status_var.set("커밋 실패")
+        self.status_var.set(self.t("status_commit_fail"))
         messagebox.showerror("Line Tracker Error", error_message)
 
     def on_graph_days_change(self, _: tk.Event) -> None:
@@ -1365,7 +1737,7 @@ class LineTrackerApp:
     def browse_repo(self) -> None:
         start_dir = self.repo_entry_var.get().strip() or str(self.repo)
         selected = filedialog.askdirectory(
-            title="리포 선택",
+            title=self.t("repo_dialog_title"),
             initialdir=start_dir if Path(start_dir).exists() else None,
         )
         if not selected:
@@ -1379,13 +1751,13 @@ class LineTrackerApp:
             return
         path = Path(raw_input).expanduser()
         if not path.exists():
-            messagebox.showerror("Line Tracker Error", "리포 경로가 존재하지 않습니다.")
+            messagebox.showerror("Line Tracker Error", self.t("error_repo_missing"))
             return
         repo = find_repo_root(path).resolve()
         try:
             run_git(repo, ["rev-parse", "--is-inside-work-tree"])
         except RuntimeError:
-            messagebox.showerror("Line Tracker Error", "유효한 Git 리포가 아닙니다.")
+            messagebox.showerror("Line Tracker Error", self.t("error_repo_invalid"))
             return
         if repo == self.repo:
             return
@@ -1395,7 +1767,7 @@ class LineTrackerApp:
         self.author_options, self.author_filter_map = self.build_author_options()
         self.author_combo.configure(values=self.author_options)
         if self.author_display not in self.author_filter_map:
-            self.author_display = "자동(내 계정)"
+            self.author_display = self.t("author_auto")
             self.author_raw = "auto"
             self.author_entry_var.set(self.author_display)
         self.author = resolve_author(self.repo, self.author_raw)
@@ -1409,14 +1781,14 @@ class LineTrackerApp:
             self.refresh()
             return
         self.cancel_auto_refresh()
-        self.status_var.set("자동 업데이트 OFF")
+        self.status_var.set(self.t("status_auto_off"))
 
     def on_notify_toggle(self) -> None:
         self.save_settings()
         if self.notify_var.get():
-            self.status_var.set("일일 목표 알림 ON")
+            self.status_var.set(self.t("notify_on"))
         else:
-            self.status_var.set("일일 목표 알림 OFF")
+            self.status_var.set(self.t("notify_off"))
 
     def maybe_notify(self, result: TrackerResult, today_done: int, today_target: int) -> None:
         if not self.notify_var.get():
@@ -1432,8 +1804,13 @@ class LineTrackerApp:
             return
         self.last_notify_date = notify_date
         self.save_settings()
-        title = "일일 목표 달성"
-        message = f"{notify_date} {today_target:,}줄 달성 (현재 {today_done:,}줄)"
+        title = self.t("toast_title")
+        message = self.t(
+            "toast_message",
+            date=notify_date,
+            target=f"{today_target:,}",
+            done=f"{today_done:,}",
+        )
         show_windows_toast(title, message)
 
     def schedule_auto_refresh(self) -> None:
