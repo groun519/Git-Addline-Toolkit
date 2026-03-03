@@ -1,6 +1,6 @@
 {
   "goal": 30000,
-  "custom_today_enabled": true,
+  "custom_today_enabled": false,
   "custom_today": "2026-03-01",
   "graph_days": "30",
   "auto_refresh": true,
@@ -13,5 +13,5 @@
   "auto_stage": false,
   "repo_path": "C:\\Users\\groun\\Documents\\git-repositories\\PROJECT-MA",
   "lang": "ko",
-  "geometry": "1440x675+208+208"
+  "geometry": "1x1+0+0"
 }

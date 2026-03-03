@@ -68,6 +68,7 @@ TEXT = {
         "memo_title": "제목",
         "memo_items": "항목",
         "add_item": "추가",
+        "remove_item": "삭제",
         "done": "DONE",
         "todo": "TODO",
         "auto_stage": "자동 스테이지(git add -A)",
@@ -124,6 +125,11 @@ TEXT = {
         "daily_progress_text": "일일 진행률: {done}/{target} ({percent}%)",
         "graph_summary": "최근 {days}일 평균 {avg}줄/일 | 최대 {max}줄",
         "repo_dialog_title": "리포 선택",
+        "setup_title": "환경 점검",
+        "git_missing": "Git을 찾을 수 없습니다. Git 설치 후 다시 실행하세요.",
+        "setup_check": "환경 점검",
+        "setup_ok": "환경 OK",
+        "env_report": "Python {py}\nGit {git}\n실행 파일: {exe}",
     },
     "en": {
         "window_title": "Line Tracker",
@@ -136,6 +142,7 @@ TEXT = {
         "memo_title": "Title",
         "memo_items": "Items",
         "add_item": "Add",
+        "remove_item": "Remove",
         "done": "DONE",
         "todo": "TODO",
         "auto_stage": "Auto stage (git add -A)",
@@ -192,6 +199,11 @@ TEXT = {
         "daily_progress_text": "Daily progress: {done}/{target} ({percent}%)",
         "graph_summary": "Last {days} days avg {avg} lines/day | max {max} lines",
         "repo_dialog_title": "Select Repository",
+        "setup_title": "Environment Check",
+        "git_missing": "Git not found. Install Git and try again.",
+        "setup_check": "Environment Check",
+        "setup_ok": "Environment OK",
+        "env_report": "Python {py}\nGit {git}\nExecutable: {exe}",
     },
 }
 
@@ -464,6 +476,7 @@ class LineTrackerApp:
             self.note_items = self._legacy_notes_to_items(saved_note_done, saved_note_todo)
         self.note_item_vars: list[tk.BooleanVar] = []
         self.note_item_entry_var = tk.StringVar(value="")
+        self.note_autosave_job: str | None = None
         self.auto_stage_var = tk.BooleanVar(value=saved_auto_stage)
         self.repo_entry_var = tk.StringVar(value=str(self.repo))
 
@@ -739,6 +752,7 @@ class LineTrackerApp:
 
         self.note_title_entry = ttk.Entry(note_card, textvariable=self.note_title_var, width=44)
         self.note_title_entry.grid(row=1, column=0, sticky="ew", pady=(4, 6))
+        self.note_title_var.trace_add("write", self.on_note_title_change)
 
         self.note_items_label = ttk.Label(note_card, text=self.t("memo_items"), style="CardLabel.TLabel")
         self.note_items_label.grid(row=2, column=0, sticky="w")
@@ -799,11 +813,7 @@ class LineTrackerApp:
         note_actions = ttk.Frame(note_card, style="Card.TFrame")
         note_actions.grid(row=6, column=0, sticky="e")
 
-        self.note_save_button = ttk.Button(note_actions, text=self.t("save_memo"), command=self.save_settings)
-        self.note_save_button.grid(row=0, column=0, sticky="e")
-
-        self.commit_button = ttk.Button(note_actions, text=self.t("commit"), command=self.commit_notes, style="Accent.TButton")
-        self.commit_button.grid(row=0, column=1, sticky="e", padx=(8, 0))
+        self.note_save_button = None
 
         self.render_note_items()
 
@@ -924,6 +934,9 @@ class LineTrackerApp:
                 self.today_override = args.today
                 self.today_entry_var.set(default_today_text)
         self.apply_language()
+        if not self.ensure_repo_ready():
+            self.root.after(0, self.root.destroy)
+            return
         self.refresh()
         self.save_settings()
 
@@ -1011,8 +1024,6 @@ class LineTrackerApp:
         self.note_items_label.configure(text=self.t("memo_items"))
         self.note_item_add_button.configure(text=self.t("add_item"))
         self.auto_stage_check.configure(text=self.t("auto_stage"))
-        self.note_save_button.configure(text=self.t("save_memo"))
-        self.commit_button.configure(text=self.t("commit"))
 
         self.controls_title.configure(text=self.t("settings"))
         self.custom_today_check.configure(text=self.t("custom_date"))
@@ -1069,6 +1080,45 @@ class LineTrackerApp:
             return
         if width < default_width:
             self.root.geometry(f"{default_width}x{height}")
+
+    def ensure_repo_ready(self) -> bool:
+        try:
+            result = subprocess.run(
+                ["git", "--version"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+            if result.returncode != 0:
+                messagebox.showerror("Line Tracker Error", self.t("git_missing"))
+                return False
+            return True
+        except FileNotFoundError:
+            messagebox.showerror("Line Tracker Error", self.t("git_missing"))
+            return False
+
+    def run_setup_check(self) -> None:
+        if not self.ensure_repo_ready():
+            return
+        py_version = sys.version.split()[0]
+        git_version = "unknown"
+        try:
+            out = subprocess.run(
+                ["git", "--version"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+            if out.returncode == 0:
+                git_version = out.stdout.strip() or git_version
+        except FileNotFoundError:
+            git_version = "not found"
+        message = self.t("env_report", py=py_version, git=git_version, exe=sys.executable)
+        messagebox.showinfo(self.t("setup_title"), f"{self.t('setup_ok')}\n\n{message}")
 
     def build_author_options(self) -> tuple[list[str], dict[str, str]]:
         auto_label = self.t("author_auto")
@@ -1579,14 +1629,26 @@ class LineTrackerApp:
                 row,
                 text=str(item.get("text", "")),
                 variable=var,
-                wraplength=NOTE_CARD_WIDTH - 80,
                 command=lambda i=idx, v=var: self.on_note_item_toggle(i, v),
             )
             check.grid(row=0, column=0, sticky="w")
 
+            remove_btn = ttk.Button(
+                row,
+                text=self.t("remove_item"),
+                command=lambda i=idx: self.remove_note_item(i),
+            )
+            remove_btn.grid(row=0, column=1, sticky="e", padx=(8, 0))
+
     def on_note_item_toggle(self, idx: int, var: tk.BooleanVar) -> None:
         if 0 <= idx < len(self.note_items):
             self.note_items[idx]["done"] = bool(var.get())
+            self.save_settings()
+
+    def remove_note_item(self, idx: int) -> None:
+        if 0 <= idx < len(self.note_items):
+            self.note_items.pop(idx)
+            self.render_note_items()
             self.save_settings()
 
     def add_note_item(self) -> None:
@@ -1603,6 +1665,15 @@ class LineTrackerApp:
 
     def on_note_item_enter(self, _: tk.Event) -> None:
         self.add_note_item()
+
+    def on_note_title_change(self, *_: object) -> None:
+        if self.note_autosave_job:
+            self.root.after_cancel(self.note_autosave_job)
+        self.note_autosave_job = self.root.after(400, self._commit_note_autosave)
+
+    def _commit_note_autosave(self) -> None:
+        self.note_autosave_job = None
+        self.save_settings()
 
     @staticmethod
     def _normalize_bullets(lines: Iterable[str]) -> list[str]:
@@ -1677,17 +1748,20 @@ class LineTrackerApp:
             except Exception as exc:  # pragma: no cover
                 self.safe_after(lambda e=str(exc): self._on_commit_error(e))
 
-        self.commit_button.configure(state="disabled")
+        if hasattr(self, "commit_button"):
+            self.commit_button.configure(state="disabled")
         self.status_var.set(self.t("status_commit_start"))
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_commit_success(self) -> None:
-        self.commit_button.configure(state="normal")
+        if hasattr(self, "commit_button"):
+            self.commit_button.configure(state="normal")
         self.status_var.set(self.t("status_commit_ok"))
         self.refresh()
 
     def _on_commit_error(self, error_message: str) -> None:
-        self.commit_button.configure(state="normal")
+        if hasattr(self, "commit_button"):
+            self.commit_button.configure(state="normal")
         self.status_var.set(self.t("status_commit_fail"))
         messagebox.showerror("Line Tracker Error", error_message)
 
