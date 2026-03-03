@@ -1,6 +1,13 @@
 @echo off
 setlocal
+if /I "%~1" NEQ "run" (
+  start "" cmd /k ""%~f0" run"
+  exit /b
+)
 title Line Tracker Setup
+set "LOG=%TEMP%\line_tracker_setup.log"
+echo [Line Tracker] Setup log: %LOG%
+echo [%DATE% %TIME%] Started >> "%LOG%"
 
 echo ============================
 echo  Line Tracker Setup (CMD)
@@ -52,25 +59,31 @@ if not defined PY_CMD (
 if not defined PY_CMD (
   set "PY_MISSING=1"
 )
+>>"%LOG%" echo Python missing: %PY_MISSING%
 
 git --version >nul 2>nul
 if errorlevel 1 (
   set "GIT_MISSING=1"
 )
+>>"%LOG%" echo Git missing: %GIT_MISSING%
 
 echo Python:
 if "%PY_MISSING%"=="1" (
   echo   NOT FOUND
+  >>"%LOG%" echo Python: NOT FOUND
 ) else (
   "%PY_CMD%" %PY_ARGS% --version
+  >>"%LOG%" echo Python: OK
 )
 echo.
 
 echo Git:
 if "%GIT_MISSING%"=="1" (
   echo   NOT FOUND
+  >>"%LOG%" echo Git: NOT FOUND
 ) else (
   git --version
+  >>"%LOG%" echo Git: OK
 )
 echo.
 
@@ -78,11 +91,15 @@ echo Tkinter:
 if "%PY_MISSING%"=="1" (
   echo   (skipped - python missing)
   set "TK_MISSING=1"
+  >>"%LOG%" echo Tkinter: SKIPPED
 ) else (
   "%PY_CMD%" %PY_ARGS% -c "import tkinter; print('tkinter OK')" 2>nul
   if errorlevel 1 (
     echo   NOT FOUND
     set "TK_MISSING=1"
+    >>"%LOG%" echo Tkinter: NOT FOUND
+  ) else (
+    >>"%LOG%" echo Tkinter: OK
   )
 )
 echo.

@@ -102,3 +102,18 @@ The UI uses the same engine under the hood.
 - Uncommitted changes include untracked text files.
 - Rename handling is disabled to match GitHub-style stats.
 - Works best when launched from `line_tracker_ui_click.vbs`.
+# 배포(설치 파일) 만들기
+
+윈도우에서 설치 후 사용이 편한 방식은 `PyInstaller + Inno Setup` 조합입니다.
+
+## 준비물
+- Python 3.10+
+- Inno Setup (iscc.exe가 PATH에 있어야 함)
+
+## 빌드
+1. `build_installer.bat` 실행
+2. 완료 후 `dist\LineTrackerSetup.exe` 생성
+
+## 결과
+- 설치 후 시작메뉴/바탕화면 아이콘 제공
+- 설치 폴더에 `setup\setup_check.bat` 포함
