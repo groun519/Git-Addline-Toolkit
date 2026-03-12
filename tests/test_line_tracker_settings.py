@@ -56,6 +56,7 @@ class SettingsTests(unittest.TestCase):
             {
                 "repo_path": "C:/repo",
                 "lang": "en",
+                "theme": "slate",
                 "goal": 123,
                 "note_title": "legacy title",
                 "note_done": "done line",
@@ -65,6 +66,7 @@ class SettingsTests(unittest.TestCase):
 
         self.assertEqual(settings.repo_path, "C:/repo")
         self.assertEqual(settings.lang, "en")
+        self.assertEqual(settings.theme, "slate")
         self.assertEqual(settings.goal, 123)
         self.assertEqual(settings.legacy_note_title, "legacy title")
         self.assertEqual(settings.legacy_note_done, "done line")
@@ -75,6 +77,7 @@ class SettingsTests(unittest.TestCase):
         settings = UISettings(
             repo_path="C:/repo",
             lang="ko",
+            theme="cream",
             geometry="1200x700+10+20",
             goal=100,
             graph_days="30",
@@ -100,6 +103,7 @@ class SettingsTests(unittest.TestCase):
                 "memo_text": "Title",
                 "repo_path": "C:/repo",
                 "lang": "ko",
+                "theme": "cream",
                 "geometry": "1200x700+10+20",
             },
         )

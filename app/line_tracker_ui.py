@@ -45,6 +45,13 @@ from line_tracker import (
     resolve_current_ref,
     resolve_ref,
 )
+from line_tracker_theme import (
+    DEFAULT_THEME_NAME,
+    ThemePalette,
+    get_theme_names,
+    get_theme_palette,
+    resolve_theme_name,
+)
 from line_tracker_refresh import RefreshSnapshot, build_refresh_snapshot
 
 AUTO_REFRESH_MS = 60_000
@@ -70,6 +77,10 @@ TEXT = {
     "ko": {
         "window_title": "Line Tracker",
         "lang_label": "언어",
+        "theme_label": "테마",
+        "theme_forest": "포레스트",
+        "theme_cream": "크림",
+        "theme_slate": "슬레이트",
         "repo_label": "리포 경로",
         "repo_select": "리포 선택",
         "graph_title": "일별 추가줄 그래프",
@@ -140,6 +151,10 @@ TEXT = {
     "en": {
         "window_title": "Line Tracker",
         "lang_label": "Language",
+        "theme_label": "Theme",
+        "theme_forest": "Forest",
+        "theme_cream": "Cream",
+        "theme_slate": "Slate",
         "repo_label": "Repository",
         "repo_select": "Browse",
         "graph_title": "Daily Additions Graph",
@@ -209,20 +224,6 @@ TEXT = {
     },
 }
 
-COLOR_BG = "#151a18"
-COLOR_CARD = "#1f2522"
-COLOR_BORDER = "#2e3833"
-COLOR_TEXT = "#e8ebe7"
-COLOR_MUTED = "#b0b8b2"
-COLOR_ACCENT = "#6bb29a"
-COLOR_ACCENT_DARK = "#5aa18a"
-COLOR_ACCENT_LIGHT = "#8cc7b3"
-COLOR_ACCENT2 = "#d4a261"
-COLOR_ACCENT2_DARK = "#c69254"
-COLOR_GREEN = "#76c7a1"
-COLOR_RED = "#d36f6f"
-COLOR_CANVAS_BG = "#1a201d"
-
 FONT_TITLE = ("Bahnschrift", 18, "bold")
 FONT_SUBTITLE = ("Bahnschrift", 10)
 FONT_BODY = ("Bahnschrift", 10)
@@ -237,6 +238,7 @@ FONT_MONO = ("Cascadia Mono", 10)
 class UISettings:
     repo_path: str = ""
     lang: str = "ko"
+    theme: str = DEFAULT_THEME_NAME
     geometry: str = ""
     goal: object = None
     graph_days: str = "14"
@@ -256,6 +258,7 @@ class UISettings:
         return cls(
             repo_path=str(data.get("repo_path", "")).strip(),
             lang=str(data.get("lang", "ko")).strip() or "ko",
+            theme=resolve_theme_name(str(data.get("theme", DEFAULT_THEME_NAME)).strip()),
             geometry=str(data.get("geometry", "")).strip(),
             goal=data.get("goal"),
             graph_days=str(data.get("graph_days", "14")),
@@ -283,6 +286,7 @@ class UISettings:
             "memo_text": self.memo_text,
             "repo_path": self.repo_path,
             "lang": self.lang,
+            "theme": self.theme,
             "geometry": self.geometry,
         }
 
@@ -329,7 +333,10 @@ class LineTrackerApp:
         saved_repo_path = self.settings.repo_path
         saved_lang = self.settings.lang
         self.lang = saved_lang if saved_lang in TEXT else "ko"
+        self.theme_name = resolve_theme_name(self.settings.theme)
+        self.theme: ThemePalette = get_theme_palette(self.theme_name)
         self.lang_var = tk.StringVar(value=LANG_DISPLAY[self.lang])
+        self.theme_var = tk.StringVar(value=self.theme_display_label(self.theme_name))
         default_repo_seed = Path(args.repo).resolve()
         repo_candidate = self.resolve_valid_repo(Path(saved_repo_path)) if saved_repo_path else None
         if repo_candidate is None:
@@ -385,7 +392,7 @@ class LineTrackerApp:
 
         self.root.title("PROJECT-MA Line Tracker")
         self.root.resizable(True, False)
-        self.root.configure(bg=COLOR_BG)
+        self.root.configure(bg=self.theme.app_bg)
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
 
@@ -394,77 +401,7 @@ class LineTrackerApp:
             self.style.theme_use("clam")
         except tk.TclError:
             pass
-        self.style.configure("App.TFrame", background=COLOR_BG)
-        self.style.configure("Card.TFrame", background=COLOR_CARD, borderwidth=1, relief="solid")
-        self.style.configure("CardInner.TFrame", background=COLOR_CARD, borderwidth=0, relief="flat")
-        self.style.configure("DeltaBox.TFrame", background=COLOR_CARD, borderwidth=1, relief="solid")
-        self.style.configure("Title.TLabel", background=COLOR_BG, foreground=COLOR_TEXT, font=FONT_TITLE)
-        self.style.configure("Subtitle.TLabel", background=COLOR_BG, foreground=COLOR_MUTED, font=FONT_SUBTITLE)
-        self.style.configure("Section.TLabel", background=COLOR_BG, foreground=COLOR_TEXT, font=FONT_SECTION)
-        self.style.configure("CardTitle.TLabel", background=COLOR_CARD, foreground=COLOR_TEXT, font=FONT_BODY)
-        self.style.configure("CardLabel.TLabel", background=COLOR_CARD, foreground=COLOR_MUTED, font=FONT_BODY)
-        self.style.configure("Stat.TLabel", background=COLOR_CARD, foreground=COLOR_TEXT, font=FONT_MONO)
-        self.style.configure("Muted.TLabel", background=COLOR_BG, foreground=COLOR_MUTED, font=FONT_BODY)
-        self.style.configure("Tile.TFrame", background=COLOR_CARD, borderwidth=1, relief="solid")
-        self.style.configure("TileLabel.TLabel", background=COLOR_CARD, foreground=COLOR_MUTED, font=FONT_TILE_LABEL)
-        self.style.configure(
-            "TileValue.TLabel",
-            background=COLOR_CARD,
-            foreground=COLOR_TEXT,
-            font=FONT_TILE_VALUE,
-        )
-        self.style.configure("Chip.TFrame", background=COLOR_CARD, borderwidth=1, relief="solid")
-        self.style.configure("ChipLabel.TLabel", background=COLOR_CARD, foreground=COLOR_MUTED, font=FONT_CHIP)
-        self.style.configure("ChipValue.TLabel", background=COLOR_CARD, foreground=COLOR_TEXT, font=FONT_CHIP)
-        self.style.configure("TCheckbutton", background=COLOR_CARD, foreground=COLOR_TEXT, font=FONT_BODY)
-        self.style.map("TCheckbutton", background=[("active", COLOR_CARD)])
-        self.style.configure("TEntry", fieldbackground=COLOR_CARD, foreground=COLOR_TEXT, font=FONT_BODY)
-        self.style.configure(
-            "TCombobox",
-            fieldbackground=COLOR_CARD,
-            background=COLOR_CARD,
-            foreground=COLOR_TEXT,
-            arrowcolor=COLOR_TEXT,
-            font=FONT_BODY,
-        )
-        self.style.map(
-            "TCombobox",
-            fieldbackground=[("readonly", COLOR_CARD)],
-            background=[("readonly", COLOR_CARD)],
-            foreground=[("readonly", COLOR_TEXT)],
-            arrowcolor=[("readonly", COLOR_TEXT)],
-        )
-        self.root.option_add("*TCombobox*Listbox*Background", COLOR_CARD)
-        self.root.option_add("*TCombobox*Listbox*Foreground", COLOR_TEXT)
-        self.root.option_add("*TCombobox*Listbox*selectBackground", COLOR_ACCENT_DARK)
-        self.root.option_add("*TCombobox*Listbox*selectForeground", COLOR_TEXT)
-        self.style.configure("TButton", font=FONT_BODY)
-        self.style.configure(
-            "Accent.TButton",
-            font=FONT_BODY,
-            foreground="#ffffff",
-            background=COLOR_ACCENT,
-            padding=(12, 6),
-        )
-        self.style.map(
-            "Accent.TButton",
-            background=[("active", COLOR_ACCENT_DARK), ("disabled", COLOR_ACCENT_LIGHT)],
-            foreground=[("disabled", "#f0f0f0")],
-        )
-        self.style.configure(
-            "Overall.Horizontal.TProgressbar",
-            troughcolor="#27302b",
-            background=COLOR_ACCENT,
-            lightcolor=COLOR_ACCENT,
-            darkcolor=COLOR_ACCENT,
-        )
-        self.style.configure(
-            "Daily.Horizontal.TProgressbar",
-            troughcolor="#2b2620",
-            background=COLOR_ACCENT2,
-            lightcolor=COLOR_ACCENT2,
-            darkcolor=COLOR_ACCENT2,
-        )
+        self.apply_color_palette()
 
         container = ttk.Frame(self.root, padding=14, style="App.TFrame")
         container.grid(row=0, column=0, sticky="nsew")
@@ -485,6 +422,7 @@ class LineTrackerApp:
             saved_auto_refresh=saved_auto_refresh,
         )
         self._build_footer(container)
+        self.apply_color_palette()
         self._finish_startup(args, default_today_text)
 
     def _initialize_runtime_state(
@@ -504,6 +442,8 @@ class LineTrackerApp:
         self.current_ref = resolve_current_ref(self.repo)
         self.main_total_committed = 0
         self.branch_total_committed = 0
+        self.graph_points: list[tuple[dt.date, int]] = []
+        self.graph_highlight_day: dt.date | None = None
         self.memo_text_value = saved_memo_text
         self.memo_autosave_job: str | None = None
         self.memo_widget_updating = False
@@ -513,8 +453,8 @@ class LineTrackerApp:
         header_frame = ttk.Frame(container, style="App.TFrame")
         header_frame.grid(row=0, column=0, columnspan=4, sticky="ew", pady=(0, 10))
         header_frame.columnconfigure(2, weight=1)
-        accent_bar = tk.Frame(header_frame, bg=COLOR_ACCENT, width=6, height=34)
-        accent_bar.grid(row=0, column=0, rowspan=2, sticky="ns", padx=(0, 10))
+        self.header_accent_bar = tk.Frame(header_frame, bg=self.theme.accent, width=6, height=34)
+        self.header_accent_bar.grid(row=0, column=0, rowspan=2, sticky="ns", padx=(0, 10))
         self.title_label = ttk.Label(header_frame, text=self.t("window_title"), style="Title.TLabel")
         self.title_label.grid(row=0, column=1, sticky="w")
         self.subtitle_label = ttk.Label(
@@ -526,7 +466,7 @@ class LineTrackerApp:
 
         right_header = ttk.Frame(header_frame, style="App.TFrame")
         right_header.grid(row=0, column=2, rowspan=2, sticky="e")
-        right_header.columnconfigure(1, weight=1)
+        right_header.columnconfigure(2, weight=1)
 
         lang_header = ttk.Frame(right_header, style="App.TFrame")
         lang_header.grid(row=0, column=0, rowspan=2, sticky="w", padx=(0, 10))
@@ -544,8 +484,24 @@ class LineTrackerApp:
         self.lang_combo.grid(row=1, column=0, sticky="w")
         self.lang_combo.bind("<<ComboboxSelected>>", self.on_language_select)
 
+        theme_header = ttk.Frame(right_header, style="App.TFrame")
+        theme_header.grid(row=0, column=1, rowspan=2, sticky="w", padx=(0, 10))
+
+        self.theme_label = ttk.Label(theme_header, text=self.t("theme_label"), style="Subtitle.TLabel")
+        self.theme_label.grid(row=0, column=0, sticky="w", pady=(0, 2))
+
+        self.theme_combo = ttk.Combobox(
+            theme_header,
+            textvariable=self.theme_var,
+            values=self.theme_display_values(),
+            width=12,
+            state="readonly",
+        )
+        self.theme_combo.grid(row=1, column=0, sticky="w")
+        self.theme_combo.bind("<<ComboboxSelected>>", self.on_theme_select)
+
         repo_header = ttk.Frame(right_header, style="App.TFrame")
-        repo_header.grid(row=0, column=1, rowspan=2, sticky="e")
+        repo_header.grid(row=0, column=2, rowspan=2, sticky="e")
         repo_header.columnconfigure(0, weight=1)
 
         self.repo_header_label = ttk.Label(repo_header, text=self.t("repo_label"), style="Subtitle.TLabel")
@@ -585,13 +541,7 @@ class LineTrackerApp:
         self.tile_grid.columnconfigure(0, weight=1, uniform="tile", minsize=tile_min_width)
         self.tile_grid.columnconfigure(1, weight=1, uniform="tile", minsize=tile_min_width)
 
-        tile_accents = [
-            COLOR_ACCENT2,
-            COLOR_ACCENT,
-            COLOR_ACCENT_LIGHT,
-            COLOR_ACCENT_DARK,
-            COLOR_ACCENT2_DARK,
-        ]
+        tile_accents = self.theme.tile_accents
         tile_positions = [
             (0, 0, 1),
             (0, 1, 1),
@@ -600,6 +550,7 @@ class LineTrackerApp:
             (2, 0, 2),
         ]
         self.tile_label_widgets: list[ttk.Label] = []
+        self.tile_accent_widgets: list[tk.Frame] = []
         tile_wrap = BASE_TILE_LABEL_WRAP
         for idx in range(5):
             row, col, colspan = tile_positions[idx]
@@ -616,6 +567,7 @@ class LineTrackerApp:
 
             accent = tk.Frame(tile, bg=tile_accents[idx], width=4)
             accent.grid(row=0, column=0, rowspan=2, sticky="ns", padx=(0, 8))
+            self.tile_accent_widgets.append(accent)
 
             label = ttk.Label(
                 tile,
@@ -651,7 +603,7 @@ class LineTrackerApp:
             style="Stat.TLabel",
         )
         self.delta_added_label.grid(row=0, column=0, sticky="e")
-        self.delta_added_label.configure(foreground=COLOR_GREEN)
+        self.delta_added_label.configure(foreground=self.theme.success)
 
         self.delta_removed_box = ttk.Frame(self.delta_value_frame, style="DeltaBox.TFrame", padding=(8, 4))
         self.delta_removed_box.grid(row=0, column=1)
@@ -662,7 +614,7 @@ class LineTrackerApp:
             style="Stat.TLabel",
         )
         self.delta_removed_label.grid(row=0, column=0, sticky="e")
-        self.delta_removed_label.configure(foreground=COLOR_RED)
+        self.delta_removed_label.configure(foreground=self.theme.danger)
 
     def _build_progress_section(self, container: ttk.Frame) -> None:
         progress_section = ttk.Frame(container, style="App.TFrame")
@@ -777,9 +729,9 @@ class LineTrackerApp:
             graph_card,
             width=GRAPH_CANVAS_WIDTH,
             height=GRAPH_CANVAS_HEIGHT,
-            bg=COLOR_CANVAS_BG,
+            bg=self.theme.canvas_bg,
             highlightthickness=1,
-            highlightbackground=COLOR_BORDER,
+            highlightbackground=self.theme.border,
         )
         self.graph_canvas.grid(row=0, column=0, sticky="ew", pady=(2, 0))
 
@@ -810,12 +762,12 @@ class LineTrackerApp:
             editor_frame,
             height=8,
             wrap="word",
-            bg=COLOR_CARD,
-            fg=COLOR_TEXT,
-            insertbackground=COLOR_TEXT,
+            bg=self.theme.card_bg,
+            fg=self.theme.text,
+            insertbackground=self.theme.text,
             highlightthickness=1,
-            highlightbackground=COLOR_BORDER,
-            highlightcolor=COLOR_ACCENT,
+            highlightbackground=self.theme.border,
+            highlightcolor=self.theme.accent,
             relief="flat",
             font=FONT_MONO,
             undo=True,
@@ -846,9 +798,9 @@ class LineTrackerApp:
         self.memo_preview_canvas = tk.Canvas(
             preview_frame,
             height=180,
-            bg=COLOR_CARD,
+            bg=self.theme.card_bg,
             highlightthickness=1,
-            highlightbackground=COLOR_BORDER,
+            highlightbackground=self.theme.border,
         )
         self.memo_preview_canvas.grid(row=0, column=0, sticky="ew")
 
@@ -1048,6 +1000,25 @@ class LineTrackerApp:
         except (KeyError, ValueError):
             return text
 
+    def theme_display_label(self, theme_name: str) -> str:
+        return self.t(f"theme_{theme_name}")
+
+    def theme_display_values(self) -> list[str]:
+        return [self.theme_display_label(theme_name) for theme_name in get_theme_names()]
+
+    def refresh_theme_selector(self) -> None:
+        if not hasattr(self, "theme_combo"):
+            return
+        self.theme_combo.configure(values=self.theme_display_values())
+        self.theme_var.set(self.theme_display_label(self.theme_name))
+
+    def resolve_selected_theme_name(self, selection: str) -> str:
+        normalized = selection.strip()
+        for theme_name in get_theme_names():
+            if normalized == self.theme_display_label(theme_name):
+                return theme_name
+        return resolve_theme_name(normalized)
+
     def format_month_label(self, month: int) -> str:
         if self.lang == "en":
             return calendar.month_abbr[month]
@@ -1093,8 +1064,10 @@ class LineTrackerApp:
         self.root.title(self.t("window_title"))
         self.title_label.configure(text=self.t("window_title"))
         self.lang_label.configure(text=self.t("lang_label"))
+        self.theme_label.configure(text=self.t("theme_label"))
         self.repo_header_label.configure(text=self.t("repo_label"))
         self.repo_apply_button.configure(text=self.t("repo_select"))
+        self.refresh_theme_selector()
 
         self.graph_title.configure(text=self.t("graph_title"))
         self.graph_days_label.configure(text=self.t("graph_period"))
@@ -1136,6 +1109,17 @@ class LineTrackerApp:
         self.save_settings()
         self.refresh()
 
+    def on_theme_select(self, _: tk.Event) -> None:
+        selected_theme_name = self.resolve_selected_theme_name(self.theme_var.get())
+        if selected_theme_name == self.theme_name:
+            self.theme_var.set(self.theme_display_label(self.theme_name))
+            return
+        self.theme_name = selected_theme_name
+        self.theme = get_theme_palette(self.theme_name)
+        self.theme_var.set(self.theme_display_label(self.theme_name))
+        self.apply_color_palette()
+        self.save_settings()
+
     def apply_layout_for_language(self) -> None:
         tile_min_width = BASE_TILE_MIN_WIDTH
         tile_wrap = BASE_TILE_LABEL_WRAP
@@ -1157,6 +1141,111 @@ class LineTrackerApp:
             current_geometry = f"{fitted_width}x{min_height}"
         self.last_window_geometry = current_geometry
         self.root.geometry(current_geometry)
+
+    def apply_color_palette(self) -> None:
+        self.root.configure(bg=self.theme.app_bg)
+        self._configure_style_palette()
+        self._configure_widget_palette()
+
+    def _configure_style_palette(self) -> None:
+        palette = self.theme
+        self.style.configure("App.TFrame", background=palette.app_bg)
+        self.style.configure("Card.TFrame", background=palette.card_bg, borderwidth=1, relief="solid")
+        self.style.configure("CardInner.TFrame", background=palette.card_bg, borderwidth=0, relief="flat")
+        self.style.configure("DeltaBox.TFrame", background=palette.card_bg, borderwidth=1, relief="solid")
+        self.style.configure("Title.TLabel", background=palette.app_bg, foreground=palette.text, font=FONT_TITLE)
+        self.style.configure("Subtitle.TLabel", background=palette.app_bg, foreground=palette.muted_text, font=FONT_SUBTITLE)
+        self.style.configure("Section.TLabel", background=palette.app_bg, foreground=palette.text, font=FONT_SECTION)
+        self.style.configure("CardTitle.TLabel", background=palette.card_bg, foreground=palette.text, font=FONT_BODY)
+        self.style.configure("CardLabel.TLabel", background=palette.card_bg, foreground=palette.muted_text, font=FONT_BODY)
+        self.style.configure("Stat.TLabel", background=palette.card_bg, foreground=palette.text, font=FONT_MONO)
+        self.style.configure("Muted.TLabel", background=palette.app_bg, foreground=palette.muted_text, font=FONT_BODY)
+        self.style.configure("Tile.TFrame", background=palette.card_bg, borderwidth=1, relief="solid")
+        self.style.configure("TileLabel.TLabel", background=palette.card_bg, foreground=palette.muted_text, font=FONT_TILE_LABEL)
+        self.style.configure(
+            "TileValue.TLabel",
+            background=palette.card_bg,
+            foreground=palette.text,
+            font=FONT_TILE_VALUE,
+        )
+        self.style.configure("Chip.TFrame", background=palette.card_bg, borderwidth=1, relief="solid")
+        self.style.configure("ChipLabel.TLabel", background=palette.card_bg, foreground=palette.muted_text, font=FONT_CHIP)
+        self.style.configure("ChipValue.TLabel", background=palette.card_bg, foreground=palette.text, font=FONT_CHIP)
+        self.style.configure("TCheckbutton", background=palette.card_bg, foreground=palette.text, font=FONT_BODY)
+        self.style.map("TCheckbutton", background=[("active", palette.card_bg)])
+        self.style.configure("TEntry", fieldbackground=palette.card_bg, foreground=palette.text, font=FONT_BODY)
+        self.style.configure(
+            "TCombobox",
+            fieldbackground=palette.card_bg,
+            background=palette.card_bg,
+            foreground=palette.text,
+            arrowcolor=palette.text,
+            font=FONT_BODY,
+        )
+        self.style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", palette.card_bg)],
+            background=[("readonly", palette.card_bg)],
+            foreground=[("readonly", palette.text)],
+            arrowcolor=[("readonly", palette.text)],
+        )
+        self.root.option_add("*TCombobox*Listbox*Background", palette.card_bg)
+        self.root.option_add("*TCombobox*Listbox*Foreground", palette.text)
+        self.root.option_add("*TCombobox*Listbox*selectBackground", palette.accent_dark)
+        self.root.option_add("*TCombobox*Listbox*selectForeground", palette.text)
+        self.style.configure("TButton", font=FONT_BODY)
+        self.style.configure(
+            "Accent.TButton",
+            font=FONT_BODY,
+            foreground=palette.button_text,
+            background=palette.accent,
+            padding=(12, 6),
+        )
+        self.style.map(
+            "Accent.TButton",
+            background=[("active", palette.accent_dark), ("disabled", palette.accent_light)],
+            foreground=[("disabled", palette.button_disabled_text)],
+        )
+        self.style.configure(
+            "Overall.Horizontal.TProgressbar",
+            troughcolor=palette.overall_progress_trough,
+            background=palette.accent,
+            lightcolor=palette.accent,
+            darkcolor=palette.accent,
+        )
+        self.style.configure(
+            "Daily.Horizontal.TProgressbar",
+            troughcolor=palette.daily_progress_trough,
+            background=palette.accent_alt,
+            lightcolor=palette.accent_alt,
+            darkcolor=palette.accent_alt,
+        )
+
+    def _configure_widget_palette(self) -> None:
+        palette = self.theme
+        if hasattr(self, "header_accent_bar"):
+            self.header_accent_bar.configure(bg=palette.accent)
+        for idx, widget in enumerate(getattr(self, "tile_accent_widgets", [])):
+            widget.configure(bg=palette.tile_accents[idx % len(palette.tile_accents)])
+        if hasattr(self, "delta_added_label"):
+            self.delta_added_label.configure(foreground=palette.success)
+        if hasattr(self, "delta_removed_label"):
+            self.delta_removed_label.configure(foreground=palette.danger)
+        if hasattr(self, "graph_canvas"):
+            self.graph_canvas.configure(bg=palette.canvas_bg, highlightbackground=palette.border)
+        if hasattr(self, "memo_text_widget"):
+            self.memo_text_widget.configure(
+                bg=palette.card_bg,
+                fg=palette.text,
+                insertbackground=palette.text,
+                highlightbackground=palette.border,
+                highlightcolor=palette.accent,
+            )
+        if hasattr(self, "memo_preview_canvas"):
+            self.memo_preview_canvas.configure(bg=palette.card_bg, highlightbackground=palette.border)
+        graph_highlight_day = getattr(self, "graph_highlight_day", None)
+        if graph_highlight_day is not None and hasattr(self, "graph_canvas"):
+            self.draw_daily_graph(getattr(self, "graph_points", []), graph_highlight_day)
 
     def ensure_repo_ready(self) -> bool:
         git_version, _, _ = get_git_info()
@@ -1394,6 +1483,7 @@ class LineTrackerApp:
             memo_text=memo_text,
             repo_path=str(self.repo) if self.repo_selected else "",
             lang=self.lang,
+            theme=self.theme_name,
             geometry=self.get_persisted_geometry(),
         )
         try:
@@ -1582,6 +1672,8 @@ class LineTrackerApp:
         avg_value: float,
         max_value: int,
     ) -> None:
+        self.graph_points = list(points)
+        self.graph_highlight_day = highlight_day
         self.draw_daily_graph(points, highlight_day)
         self.graph_summary_var.set(
             self.t(
@@ -1594,6 +1686,7 @@ class LineTrackerApp:
 
     def draw_daily_graph(self, points: list[tuple[dt.date, int]], highlight_day: dt.date) -> None:
         canvas = self.graph_canvas
+        palette = self.theme
         canvas.delete("all")
 
         width = GRAPH_CANVAS_WIDTH
@@ -1613,7 +1706,7 @@ class LineTrackerApp:
             margin_top,
             margin_left + chart_w,
             margin_top + chart_h,
-            outline=COLOR_BORDER,
+            outline=palette.border,
             width=1,
         )
 
@@ -1629,7 +1722,7 @@ class LineTrackerApp:
                 y,
                 margin_left + chart_w,
                 y,
-                fill="#2a322e",
+                fill=palette.graph_grid,
                 width=1,
             )
             label_value = int(round(y_top * i / grid_count))
@@ -1638,7 +1731,7 @@ class LineTrackerApp:
                 y,
                 text=f"{label_value}",
                 anchor="e",
-                fill=COLOR_MUTED,
+                fill=palette.muted_text,
                 font=("Consolas", 8),
             )
 
@@ -1658,7 +1751,7 @@ class LineTrackerApp:
         if len(line_points) >= 4:
             canvas.create_line(
                 *line_points,
-                fill=COLOR_ACCENT,
+                fill=palette.accent,
                 width=2,
                 smooth=False,
             )
@@ -1668,7 +1761,7 @@ class LineTrackerApp:
             x = margin_left + idx * slot_w + slot_w / 2
             y = y_base - (value / y_top) * chart_h if y_top > 0 else y_base
             radius = 4 if day == highlight_day else 3
-            color = COLOR_ACCENT2 if day == highlight_day else COLOR_ACCENT
+            color = palette.accent_alt if day == highlight_day else palette.accent
             canvas.create_oval(
                 x - radius,
                 y - radius,
@@ -1684,7 +1777,7 @@ class LineTrackerApp:
                     label_y,
                     text=day.strftime("%m-%d"),
                     anchor="n",
-                    fill=COLOR_MUTED,
+                    fill=palette.muted_text,
                     font=("Consolas", 7),
                 )
 
