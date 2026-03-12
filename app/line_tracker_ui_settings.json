@@ -4,14 +4,10 @@
   "custom_today": "2026-03-01",
   "graph_days": "30",
   "auto_refresh": true,
-  "notify_on_goal": true,
-  "last_notify_date": "2026-03-02",
   "author": "groun519\\ <groun519@gmail\\.com>",
   "author_display": "groun519 <groun519@gmail.com>",
-  "note_title": "Todo Destroy 1",
-  "note_items": [],
-  "auto_stage": false,
+  "memo_text": "[제목 입력]\n\nDONE\n-\n\nTODO\n-\n-",
   "repo_path": "C:\\Users\\groun\\Documents\\git-repositories\\PROJECT-MA",
   "lang": "ko",
-  "geometry": "1440x675+38+160"
+  "geometry": "1440x675+135+255"
 }

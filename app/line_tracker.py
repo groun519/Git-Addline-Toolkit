@@ -7,7 +7,9 @@ import calendar
 import datetime as dt
 import json
 import math
+import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -20,6 +22,7 @@ DEFAULT_BASE_TOTAL = -1
 DEFAULT_BASE_COMMIT = "auto"
 DEFAULT_AUTHOR = "auto"
 CACHE_VERSION = 2
+APP_STATE_DIR_NAME = "LineTracker"
 
 BINARY_EXTENSIONS = {
     ".uasset",
@@ -57,7 +60,126 @@ _TOTAL_UP_TO_CACHE: dict[tuple[str, str, str, str], int] = {}
 _CACHE_LOCK = threading.RLock()
 _CACHE_LOADED = False
 _CACHE_DIRTY = False
-_CACHE_PATH = Path(__file__).resolve().with_name("line_tracker_cache.json")
+_GIT_EXECUTABLE: str | None = None
+_GIT_SOURCE: str | None = None
+
+
+def get_app_state_dir() -> Path:
+    local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
+    if local_appdata:
+        return Path(local_appdata) / APP_STATE_DIR_NAME
+    return Path.home() / "AppData" / "Local" / APP_STATE_DIR_NAME
+
+
+def get_app_state_path(filename: str) -> Path:
+    return get_app_state_dir() / filename
+
+
+def get_legacy_state_path(filename: str) -> Path:
+    return Path(__file__).resolve().with_name(filename)
+
+
+_CACHE_PATH = get_app_state_path("line_tracker_cache.json")
+_LEGACY_CACHE_PATH = get_legacy_state_path("line_tracker_cache.json")
+
+
+def _iter_git_roots() -> list[Path]:
+    roots: list[Path] = []
+    if getattr(sys, "frozen", False):
+        roots.append(Path(sys.executable).resolve().parent)
+
+    module_dir = Path(__file__).resolve().parent
+    roots.extend([module_dir, module_dir.parent])
+
+    unique_roots: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        key = str(root).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_roots.append(root)
+    return unique_roots
+
+
+def find_bundled_git() -> Path | None:
+    relative_paths = (
+        ("PortableGit", "cmd", "git.exe"),
+        ("PortableGit", "bin", "git.exe"),
+        ("runtime", "PortableGit", "cmd", "git.exe"),
+        ("runtime", "PortableGit", "bin", "git.exe"),
+        ("vendor", "PortableGit", "cmd", "git.exe"),
+        ("vendor", "PortableGit", "bin", "git.exe"),
+    )
+    for root in _iter_git_roots():
+        for parts in relative_paths:
+            candidate = root.joinpath(*parts)
+            if candidate.is_file():
+                return candidate
+    return None
+
+
+def resolve_git_executable() -> str:
+    global _GIT_EXECUTABLE, _GIT_SOURCE
+    if _GIT_EXECUTABLE:
+        return _GIT_EXECUTABLE
+
+    override = os.environ.get("LINE_TRACKER_GIT", "").strip()
+    if override:
+        override_path = Path(override).expanduser()
+        if override_path.is_file():
+            _GIT_EXECUTABLE = str(override_path)
+            _GIT_SOURCE = "env"
+            return _GIT_EXECUTABLE
+        override_which = shutil.which(override)
+        if override_which:
+            _GIT_EXECUTABLE = override_which
+            _GIT_SOURCE = "env"
+            return _GIT_EXECUTABLE
+
+    bundled_git = find_bundled_git()
+    if bundled_git is not None:
+        _GIT_EXECUTABLE = str(bundled_git)
+        _GIT_SOURCE = "bundled"
+        return _GIT_EXECUTABLE
+
+    path_git = shutil.which("git")
+    if path_git:
+        _GIT_EXECUTABLE = path_git
+        _GIT_SOURCE = "path"
+        return _GIT_EXECUTABLE
+
+    raise FileNotFoundError("git executable not found")
+
+
+def get_git_version() -> str | None:
+    try:
+        git_executable = resolve_git_executable()
+    except FileNotFoundError:
+        return None
+
+    try:
+        result = subprocess.run(
+            [git_executable, "--version"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def get_git_info() -> tuple[str | None, str | None, str | None]:
+    try:
+        git_executable = resolve_git_executable()
+    except FileNotFoundError:
+        return None, None, None
+    return get_git_version(), git_executable, _GIT_SOURCE
 
 
 @dataclass(frozen=True)
@@ -87,8 +209,9 @@ class TrackerResult:
 
 
 def run_git(repo: Path, args: list[str]) -> str:
+    git_executable = resolve_git_executable()
     result = subprocess.run(
-        ["git", *args],
+        [git_executable, *args],
         cwd=repo,
         capture_output=True,
         text=True,
@@ -104,8 +227,12 @@ def run_git(repo: Path, args: list[str]) -> str:
 
 def find_repo_root(start: Path) -> Path:
     try:
+        git_executable = resolve_git_executable()
+    except FileNotFoundError:
+        return start
+    try:
         result = subprocess.run(
-            ["git", "-C", str(start), "rev-parse", "--show-toplevel"],
+            [git_executable, "-C", str(start), "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -134,10 +261,11 @@ def _load_cache() -> None:
     if _CACHE_LOADED:
         return
     _CACHE_LOADED = True
-    if not _CACHE_PATH.exists():
+    cache_path = _CACHE_PATH if _CACHE_PATH.exists() else _LEGACY_CACHE_PATH
+    if not cache_path.exists():
         return
     try:
-        raw = _CACHE_PATH.read_text(encoding="utf-8")
+        raw = cache_path.read_text(encoding="utf-8")
         data = json.loads(raw)
     except (OSError, json.JSONDecodeError):
         return
@@ -201,6 +329,7 @@ def _save_cache() -> None:
                 [list(key), {day.isoformat(): val for day, val in value.items()}]
             )
     try:
+        _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
         _CACHE_PATH.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -263,8 +392,12 @@ def resolve_current_ref(repo: Path) -> str:
 def git_ref_exists(repo: Path, ref: str) -> bool:
     _load_cache()
     try:
+        git_executable = resolve_git_executable()
+    except FileNotFoundError:
+        return False
+    try:
         result = subprocess.run(
-            ["git", "show-ref", "--verify", "--quiet", ref],
+            [git_executable, "show-ref", "--verify", "--quiet", ref],
             cwd=repo,
             capture_output=True,
             text=True,

@@ -2,20 +2,30 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import calendar
 import datetime as dt
 import json
 import math
 import re
-import subprocess
 import sys
 import threading
 import tkinter as tk
-from typing import Iterable
+import webbrowser
+from dataclasses import dataclass
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+from line_tracker_memo import (
+    MemoLabels,
+    build_memo_text,
+    coerce_saved_memo_text,
+    default_memo_text,
+    get_placeholder_titles,
+    move_memo_item_between_sections,
+    normalize_loaded_memo_text,
+    parse_memo_text,
+    split_commit_message,
+)
 from line_tracker import (
     DEFAULT_AUTHOR,
     DEFAULT_BASE_COMMIT,
@@ -25,21 +35,17 @@ from line_tracker import (
     TrackerResult,
     compute_metrics,
     format_output_lines,
-    get_committed_insertions_by_date,
-    get_committed_insertions_for_date,
-    get_committed_insertions_by_date_combined,
-    get_committed_insertions_for_date_combined,
-    get_committed_insertions,
+    get_app_state_path,
+    get_legacy_state_path,
     clear_cache_for_repo,
     find_repo_root,
-    get_total_insertions_up_to,
-    get_uncommitted_deletions,
+    get_git_info,
     run_git,
     resolve_author,
-    resolve_base_commit,
     resolve_current_ref,
     resolve_ref,
 )
+from line_tracker_refresh import RefreshSnapshot, build_refresh_snapshot
 
 AUTO_REFRESH_MS = 60_000
 GRAPH_CANVAS_WIDTH = 420
@@ -49,10 +55,14 @@ GRAPH_CARD_WIDTH = GRAPH_CANVAS_WIDTH + 24
 NOTE_CARD_WIDTH = 420
 BASE_WINDOW_WIDTH = 1440
 BASE_WINDOW_HEIGHT = 675
+MIN_WINDOW_WIDTH = 1100
 MIN_WINDOW_HEIGHT = 675
 BASE_TILE_MIN_WIDTH = 250
 BASE_TILE_LABEL_WRAP = 240
 SETTINGS_FILE_NAME = "line_tracker_ui_settings.json"
+WINDOW_SCREEN_MARGIN = 80
+GEOMETRY_RE = re.compile(r"^(?P<width>\d+)x(?P<height>\d+)(?:(?P<x>[+-]\d+)(?P<y>[+-]\d+))?$")
+AUTHOR_IDENTITY_RE = re.compile(r"^(?P<name>.+?)\s*<(?P<email>[^<>]+)>$")
 
 LANG_OPTIONS = {"한국어": "ko", "English": "en"}
 LANG_DISPLAY = {"ko": "한국어", "en": "English"}
@@ -65,26 +75,28 @@ TEXT = {
         "graph_title": "일별 추가줄 그래프",
         "graph_period": "기간",
         "commit_memo": "커밋 메모",
+        "memo_editor": "메모 원문",
+        "memo_preview": "자동 분리 미리보기",
+        "memo_hint": "첫 줄은 제목, 나머지는 DONE/TODO 항목으로 자동 분리됩니다.",
+        "memo_template_title": "[제목 입력]",
         "memo_title": "제목",
-        "memo_items": "항목",
-        "add_item": "추가",
-        "remove_item": "삭제",
+        "memo_empty": "(비어 있음)",
         "done": "DONE",
         "todo": "TODO",
-        "auto_stage": "자동 스테이지(git add -A)",
-        "save_memo": "메모 저장",
-        "commit": "커밋",
+        "move_to_done": "DONE로 이동",
+        "move_to_todo": "TODO로 이동",
+        "copy_summary": "제목 복사",
+        "copy_description": "설명 복사",
         "settings": "설정",
         "custom_date": "날짜 커스텀(YYYY-MM-DD)",
         "apply_date": "날짜 적용",
         "goal_label": "목표 줄수",
         "apply_goal": "목표 적용",
-        "author_label": "저자 선택",
-        "apply_author": "저자 적용",
+        "author_label": "유저 선택",
+        "apply_author": "유저 적용",
         "author_auto": "자동(내 계정)",
         "author_all": "전체",
         "auto_refresh": "1분마다 자동 업데이트",
-        "notify_goal": "일일 목표 달성 알림",
         "progress": "진행률",
         "overall_progress": "전체 진행률",
         "daily_progress": "일일 진행률",
@@ -95,20 +107,17 @@ TEXT = {
         "status_updated": "업데이트: {time}",
         "status_auto_suffix": " (자동 1분 ON)",
         "status_clipboard": "클립보드에 복사됨",
-        "status_commit_start": "커밋 중...",
-        "status_commit_ok": "커밋 완료",
-        "status_commit_fail": "커밋 실패",
+        "status_summary_copied": "커밋 제목이 클립보드에 복사됨",
+        "status_description_copied": "커밋 설명이 클립보드에 복사됨",
         "status_error": "오류 발생",
         "status_auto_off": "자동 업데이트 OFF",
-        "notify_on": "일일 목표 알림 ON",
-        "notify_off": "일일 목표 알림 OFF",
-        "toast_title": "일일 목표 달성",
-        "toast_message": "{date} {target}줄 달성 (현재 {done}줄)",
+        "status_repo_needed": "리포 경로를 선택한 뒤 새로고침하세요.",
         "error_date_format": "날짜 형식은 YYYY-MM-DD 로 입력하세요.",
         "error_goal": "목표 줄수는 1 이상의 정수로 입력하세요.",
         "error_repo_missing": "리포 경로가 존재하지 않습니다.",
         "error_repo_invalid": "유효한 Git 리포가 아닙니다.",
         "error_need_title": "제목을 입력하세요.",
+        "repo_not_selected": "리포 미선택",
         "today_label": "오늘 날짜",
         "days_left_label": "남은 날짜({month})",
         "day_suffix": "일",
@@ -126,10 +135,7 @@ TEXT = {
         "graph_summary": "최근 {days}일 평균 {avg}줄/일 | 최대 {max}줄",
         "repo_dialog_title": "리포 선택",
         "setup_title": "환경 점검",
-        "git_missing": "Git을 찾을 수 없습니다. Git 설치 후 다시 실행하세요.",
-        "setup_check": "환경 점검",
-        "setup_ok": "환경 OK",
-        "env_report": "Python {py}\nGit {git}\n실행 파일: {exe}",
+        "git_missing": "Git을 찾을 수 없습니다.\nGit for Windows를 설치하거나, 설치본에 PortableGit을 함께 포함하세요.\n지금 다운로드 페이지를 여시겠습니까?",
     },
     "en": {
         "window_title": "Line Tracker",
@@ -139,26 +145,28 @@ TEXT = {
         "graph_title": "Daily Additions Graph",
         "graph_period": "Range",
         "commit_memo": "Commit Memo",
+        "memo_editor": "Memo Text",
+        "memo_preview": "Parsed Preview",
+        "memo_hint": "The first line becomes the title. Remaining lines are split into DONE/TODO items.",
+        "memo_template_title": "[Enter title]",
         "memo_title": "Title",
-        "memo_items": "Items",
-        "add_item": "Add",
-        "remove_item": "Remove",
+        "memo_empty": "(Empty)",
         "done": "DONE",
         "todo": "TODO",
-        "auto_stage": "Auto stage (git add -A)",
-        "save_memo": "Save Memo",
-        "commit": "Commit",
+        "move_to_done": "Move to DONE",
+        "move_to_todo": "Move to TODO",
+        "copy_summary": "Copy Summary",
+        "copy_description": "Copy Description",
         "settings": "Settings",
         "custom_date": "Custom Date (YYYY-MM-DD)",
         "apply_date": "Apply Date",
         "goal_label": "Goal Lines",
         "apply_goal": "Apply Goal",
-        "author_label": "Author",
-        "apply_author": "Apply Author",
+        "author_label": "User",
+        "apply_author": "Apply User",
         "author_auto": "Auto (me)",
         "author_all": "All",
         "auto_refresh": "Auto refresh (1 min)",
-        "notify_goal": "Daily goal notification",
         "progress": "Progress",
         "overall_progress": "Overall Progress",
         "daily_progress": "Daily Progress",
@@ -169,20 +177,17 @@ TEXT = {
         "status_updated": "Updated: {time}",
         "status_auto_suffix": " (auto 1 min ON)",
         "status_clipboard": "Copied to clipboard",
-        "status_commit_start": "Committing...",
-        "status_commit_ok": "Commit complete",
-        "status_commit_fail": "Commit failed",
+        "status_summary_copied": "Commit summary copied to clipboard",
+        "status_description_copied": "Commit description copied to clipboard",
         "status_error": "Error",
         "status_auto_off": "Auto refresh OFF",
-        "notify_on": "Daily goal notify ON",
-        "notify_off": "Daily goal notify OFF",
-        "toast_title": "Daily Goal Reached",
-        "toast_message": "{date} reached {target} lines (now {done})",
+        "status_repo_needed": "Choose a repository path, then refresh.",
         "error_date_format": "Date must be YYYY-MM-DD.",
         "error_goal": "Goal lines must be a positive integer.",
         "error_repo_missing": "Repository path does not exist.",
         "error_repo_invalid": "Not a valid Git repository.",
         "error_need_title": "Please enter a title.",
+        "repo_not_selected": "No repository selected",
         "today_label": "Today",
         "days_left_label": "Days left ({month})",
         "day_suffix": " days",
@@ -200,10 +205,7 @@ TEXT = {
         "graph_summary": "Last {days} days avg {avg} lines/day | max {max} lines",
         "repo_dialog_title": "Select Repository",
         "setup_title": "Environment Check",
-        "git_missing": "Git not found. Install Git and try again.",
-        "setup_check": "Environment Check",
-        "setup_ok": "Environment OK",
-        "env_report": "Python {py}\nGit {git}\nExecutable: {exe}",
+        "git_missing": "Git was not found.\nInstall Git for Windows or bundle PortableGit with the app.\nOpen the download page now?",
     },
 }
 
@@ -231,44 +233,62 @@ FONT_CHIP = ("Bahnschrift", 9)
 FONT_MONO = ("Cascadia Mono", 10)
 
 
+@dataclass(frozen=True)
+class UISettings:
+    repo_path: str = ""
+    lang: str = "ko"
+    geometry: str = ""
+    goal: object = None
+    graph_days: str = "14"
+    author: str = ""
+    author_display: str = ""
+    custom_today_enabled: object = None
+    custom_today: str = ""
+    auto_refresh: object = False
+    memo_text: object = None
+    legacy_note_title: str = ""
+    legacy_note_items: object = None
+    legacy_note_done: str = ""
+    legacy_note_todo: str = ""
+
+    @classmethod
+    def from_dict(cls, data: dict[str, object]) -> UISettings:
+        return cls(
+            repo_path=str(data.get("repo_path", "")).strip(),
+            lang=str(data.get("lang", "ko")).strip() or "ko",
+            geometry=str(data.get("geometry", "")).strip(),
+            goal=data.get("goal"),
+            graph_days=str(data.get("graph_days", "14")),
+            author=str(data.get("author", "")).strip(),
+            author_display=str(data.get("author_display", "")).strip(),
+            custom_today_enabled=data.get("custom_today_enabled"),
+            custom_today=str(data.get("custom_today", "")).strip(),
+            auto_refresh=data.get("auto_refresh", False),
+            memo_text=data.get("memo_text"),
+            legacy_note_title=str(data.get("note_title", "")).strip(),
+            legacy_note_items=data.get("note_items"),
+            legacy_note_done=str(data.get("note_done", "")),
+            legacy_note_todo=str(data.get("note_todo", "")),
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "goal": self.goal,
+            "custom_today_enabled": self.custom_today_enabled,
+            "custom_today": self.custom_today,
+            "graph_days": self.graph_days,
+            "auto_refresh": self.auto_refresh,
+            "author": self.author,
+            "author_display": self.author_display,
+            "memo_text": self.memo_text,
+            "repo_path": self.repo_path,
+            "lang": self.lang,
+            "geometry": self.geometry,
+        }
+
+
 def parse_date(value: str) -> dt.date:
     return dt.date.fromisoformat(value)
-
-
-def _xml_escape(value: str) -> str:
-    return (
-        value.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-        .replace("'", "&apos;")
-    )
-
-
-def show_windows_toast(title: str, message: str) -> None:
-    title = _xml_escape(title)
-    message = _xml_escape(message)
-    ps_script = f"""
-[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null
-[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] > $null
-$xml = New-Object Windows.Data.Xml.Dom.XmlDocument
-$xml.LoadXml('<toast><visual><binding template="ToastGeneric"><text>{title}</text><text>{message}</text></binding></visual></toast>')
-$toast = New-Object Windows.UI.Notifications.ToastNotification $xml
-$notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Line Tracker')
-$notifier.Show($toast)
-"""
-    try:
-        encoded = base64.b64encode(ps_script.encode("utf-16le")).decode("ascii")
-        kwargs: dict[str, object] = {}
-        if hasattr(subprocess, "CREATE_NO_WINDOW"):
-            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-        subprocess.Popen(
-            ["powershell", "-NoProfile", "-EncodedCommand", encoded],
-            **kwargs,
-        )
-    except Exception:
-        pass
-
 
 def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="UI launcher for monthly insertion-line tracker.")
@@ -289,25 +309,33 @@ def make_parser() -> argparse.ArgumentParser:
 
 
 class LineTrackerApp:
+    @staticmethod
+    def resolve_valid_repo(path: Path) -> Path | None:
+        try:
+            candidate = find_repo_root(path).resolve()
+        except OSError:
+            return None
+        try:
+            run_git(candidate, ["rev-parse", "--is-inside-work-tree"])
+        except RuntimeError:
+            return None
+        return candidate
+
     def __init__(self, root: tk.Tk, args: argparse.Namespace) -> None:
         self.root = root
-        self.settings_path = Path(__file__).resolve().with_name(SETTINGS_FILE_NAME)
+        self.settings_path = get_app_state_path(SETTINGS_FILE_NAME)
+        self.legacy_settings_path = get_legacy_state_path(SETTINGS_FILE_NAME)
         self.settings = self.load_settings()
-        saved_repo_path = str(self.settings.get("repo_path", "")).strip()
-        saved_lang = str(self.settings.get("lang", "ko")).strip()
+        saved_repo_path = self.settings.repo_path
+        saved_lang = self.settings.lang
         self.lang = saved_lang if saved_lang in TEXT else "ko"
         self.lang_var = tk.StringVar(value=LANG_DISPLAY[self.lang])
-        if saved_repo_path and Path(saved_repo_path).exists():
-            repo_seed = Path(saved_repo_path)
-        else:
-            repo_seed = Path(args.repo)
-        repo_candidate = find_repo_root(repo_seed).resolve()
-        if saved_repo_path:
-            try:
-                run_git(repo_candidate, ["rev-parse", "--is-inside-work-tree"])
-            except RuntimeError:
-                repo_candidate = find_repo_root(Path(args.repo)).resolve()
-        self.repo = repo_candidate
+        default_repo_seed = Path(args.repo).resolve()
+        repo_candidate = self.resolve_valid_repo(Path(saved_repo_path)) if saved_repo_path else None
+        if repo_candidate is None:
+            repo_candidate = self.resolve_valid_repo(default_repo_seed)
+        self.repo_selected = repo_candidate is not None
+        self.repo = repo_candidate or default_repo_seed
         self.goal = args.goal
         self.base_total = args.base_total
         self.base_commit = args.base_commit
@@ -316,50 +344,38 @@ class LineTrackerApp:
         self.ref = resolve_ref(self.repo, args.ref)
         self.today = args.today
         self.month_end = args.month_end
-        saved_geometry = str(self.settings.get("geometry", "")).strip()
         default_width = BASE_WINDOW_WIDTH
         default_height = BASE_WINDOW_HEIGHT
         min_height = MIN_WINDOW_HEIGHT
-        width = default_width
-        height = default_height
-        if saved_geometry:
-            try:
-                size_part = saved_geometry.split("+", 1)[0]
-                w_str, h_str = size_part.split("x", 1)
-                width = min(max(int(w_str), default_width), default_width)
-                height = min(max(int(h_str), min_height), default_height)
-            except (ValueError, IndexError):
-                width = default_width
-                height = default_height
-        else:
-            screen_w = self.root.winfo_screenwidth()
-            if screen_w:
-                width = default_width
-        self.root.geometry(f"{width}x{height}")
-        self.root.minsize(default_width, min_height)
+        initial_min_width = min(MIN_WINDOW_WIDTH, max(640, self.root.winfo_screenwidth() - WINDOW_SCREEN_MARGIN))
+        default_geometry = f"{default_width}x{default_height}"
+        saved_geometry = self.normalize_geometry(self.settings.geometry)
+        self.last_window_geometry = saved_geometry or default_geometry
+        self.root.geometry(self.last_window_geometry)
+        self.root.minsize(initial_min_width, min_height)
         self.base_window_width = BASE_WINDOW_WIDTH
         self.min_height = min_height
 
-        saved_goal = self._coerce_positive_int(self.settings.get("goal"), self.goal)
-        saved_graph_days = str(self.settings.get("graph_days", "14"))
+        saved_goal = self._coerce_positive_int(self.settings.goal, self.goal)
+        saved_graph_days = self.settings.graph_days
         if saved_graph_days not in {"7", "14", "21", "30", "60", "90", "180"}:
             saved_graph_days = "14"
-        saved_author = str(self.settings.get("author", args.author)).strip()
-        saved_author_display = str(self.settings.get("author_display", "")).strip()
-        saved_custom_today_enabled = bool(self.settings.get("custom_today_enabled", bool(args.today)))
+        saved_author = self.settings.author or args.author
+        saved_author_display = self.settings.author_display
+        saved_custom_today_enabled = bool(self.settings.custom_today_enabled if self.settings.custom_today_enabled is not None else bool(args.today))
         default_today_text = args.today.isoformat() if args.today else dt.date.today().isoformat()
-        saved_today_text = str(self.settings.get("custom_today", default_today_text)).strip() or default_today_text
-        saved_auto_refresh = bool(self.settings.get("auto_refresh", False))
-        saved_notify_on_goal = bool(self.settings.get("notify_on_goal", False))
-        saved_last_notify_date = str(self.settings.get("last_notify_date", "")).strip()
-        saved_note_title = str(self.settings.get("note_title", "")).strip()
-        saved_note_done = str(self.settings.get("note_done", ""))
-        saved_note_todo = str(self.settings.get("note_todo", ""))
-        saved_note_items = self.settings.get("note_items")
-        saved_auto_stage = bool(self.settings.get("auto_stage", False))
-
+        saved_today_text = self.settings.custom_today or default_today_text
+        saved_auto_refresh = bool(self.settings.auto_refresh)
+        saved_memo_text = coerce_saved_memo_text(
+            self.settings.memo_text,
+            self.settings.legacy_note_title,
+            self.settings.legacy_note_items,
+            self.settings.legacy_note_done,
+            self.settings.legacy_note_todo,
+            self.memo_labels(),
+        )
         self.goal = saved_goal
-        self.author_options, self.author_filter_map = self.build_author_options()
+        self.author_options, self.author_filter_map, self.author_display_aliases = self.build_author_options()
         display_value = saved_author_display if saved_author_display in self.author_filter_map else ""
         if not display_value:
             display_value = self.map_author_to_display(saved_author or args.author)
@@ -455,7 +471,28 @@ class LineTrackerApp:
         container.columnconfigure(0, weight=0)
         container.columnconfigure(1, weight=0)
         container.columnconfigure(2, weight=0)
+        self.container = container
 
+        self._initialize_runtime_state(args, saved_custom_today_enabled, saved_memo_text)
+        self._build_header(container)
+        self._build_output_section(container)
+        self._build_progress_section(container)
+        self._build_right_panel(
+            container,
+            saved_graph_days=saved_graph_days,
+            saved_custom_today_enabled=saved_custom_today_enabled,
+            saved_today_text=saved_today_text,
+            saved_auto_refresh=saved_auto_refresh,
+        )
+        self._build_footer(container)
+        self._finish_startup(args, default_today_text)
+
+    def _initialize_runtime_state(
+        self,
+        args: argparse.Namespace,
+        saved_custom_today_enabled: bool,
+        saved_memo_text: str,
+    ) -> None:
         self.auto_refresh_job: str | None = None
         self.refresh_request_id = 0
         self.refresh_in_progress = False
@@ -464,22 +501,15 @@ class LineTrackerApp:
         self.meta_value_vars = [tk.StringVar(value="") for _ in range(2)]
         self.tile_label_vars = [tk.StringVar(value="") for _ in range(5)]
         self.tile_value_vars = [tk.StringVar(value="") for _ in range(5)]
-        self.delta_var = tk.StringVar(value="+0 / -0")
-        self.notify_var = tk.BooleanVar(value=saved_notify_on_goal)
         self.current_ref = resolve_current_ref(self.repo)
-        self.last_notify_date = saved_last_notify_date
         self.main_total_committed = 0
         self.branch_total_committed = 0
-        self.note_title_var = tk.StringVar(value=saved_note_title)
-        self.note_items = self._coerce_note_items(saved_note_items)
-        if not self.note_items:
-            self.note_items = self._legacy_notes_to_items(saved_note_done, saved_note_todo)
-        self.note_item_vars: list[tk.BooleanVar] = []
-        self.note_item_entry_var = tk.StringVar(value="")
-        self.note_autosave_job: str | None = None
-        self.auto_stage_var = tk.BooleanVar(value=saved_auto_stage)
-        self.repo_entry_var = tk.StringVar(value=str(self.repo))
+        self.memo_text_value = saved_memo_text
+        self.memo_autosave_job: str | None = None
+        self.memo_widget_updating = False
+        self.repo_entry_var = tk.StringVar(value=str(self.repo) if self.repo_selected else "")
 
+    def _build_header(self, container: ttk.Frame) -> None:
         header_frame = ttk.Frame(container, style="App.TFrame")
         header_frame.grid(row=0, column=0, columnspan=4, sticky="ew", pady=(0, 10))
         header_frame.columnconfigure(2, weight=1)
@@ -528,6 +558,7 @@ class LineTrackerApp:
         self.repo_apply_button = ttk.Button(repo_header, text=self.t("repo_select"), command=self.browse_repo)
         self.repo_apply_button.grid(row=1, column=1, sticky="e", padx=(8, 0))
 
+    def _build_output_section(self, container: ttk.Frame) -> None:
         output_section = ttk.Frame(container, style="App.TFrame")
         output_section.grid(row=1, column=0, sticky="ew", padx=(0, 10))
         output_section.columnconfigure(0, weight=1)
@@ -633,6 +664,7 @@ class LineTrackerApp:
         self.delta_removed_label.grid(row=0, column=0, sticky="e")
         self.delta_removed_label.configure(foreground=COLOR_RED)
 
+    def _build_progress_section(self, container: ttk.Frame) -> None:
         progress_section = ttk.Frame(container, style="App.TFrame")
         progress_section.grid(row=2, column=0, sticky="ew", padx=(0, 10), pady=(10, 0))
         progress_section.columnconfigure(0, weight=1)
@@ -689,11 +721,30 @@ class LineTrackerApp:
         )
         self.daily_progress_text_label.grid(row=5, column=0, sticky="w", pady=(4, 0))
 
+    def _build_right_panel(
+        self,
+        container: ttk.Frame,
+        *,
+        saved_graph_days: str,
+        saved_custom_today_enabled: bool,
+        saved_today_text: str,
+        saved_auto_refresh: bool,
+    ) -> None:
         right_area = ttk.Frame(container, style="App.TFrame")
         right_area.grid(row=1, column=2, rowspan=2, sticky="nw", padx=(14, 0))
         right_area.columnconfigure(0, weight=0, minsize=GRAPH_CARD_WIDTH)
         right_area.columnconfigure(1, weight=0, minsize=NOTE_CARD_WIDTH)
 
+        self._build_graph_section(right_area, saved_graph_days)
+        self._build_memo_section(right_area)
+        self._build_controls_section(
+            right_area,
+            saved_custom_today_enabled=saved_custom_today_enabled,
+            saved_today_text=saved_today_text,
+            saved_auto_refresh=saved_auto_refresh,
+        )
+
+    def _build_graph_section(self, right_area: ttk.Frame, saved_graph_days: str) -> None:
         graph_section = ttk.Frame(right_area, style="App.TFrame")
         graph_section.grid(row=0, column=0, sticky="nw", padx=(0, 10))
         graph_section.columnconfigure(0, weight=1)
@@ -736,6 +787,7 @@ class LineTrackerApp:
         self.graph_summary_label = ttk.Label(graph_card, textvariable=self.graph_summary_var, style="CardLabel.TLabel")
         self.graph_summary_label.grid(row=1, column=0, sticky="w", pady=(6, 0))
 
+    def _build_memo_section(self, right_area: ttk.Frame) -> None:
         note_section = ttk.Frame(right_area, style="App.TFrame")
         note_section.grid(row=0, column=1, rowspan=2, sticky="nw", padx=(10, 0))
         note_section.columnconfigure(0, weight=1, minsize=NOTE_CARD_WIDTH)
@@ -747,76 +799,102 @@ class LineTrackerApp:
         note_card.grid(row=1, column=0, sticky="ew")
         note_card.columnconfigure(0, weight=1)
 
-        self.note_title_text_label = ttk.Label(note_card, text=self.t("memo_title"), style="CardLabel.TLabel")
-        self.note_title_text_label.grid(row=0, column=0, sticky="w")
+        self.note_editor_label = ttk.Label(note_card, text=self.t("memo_editor"), style="CardLabel.TLabel")
+        self.note_editor_label.grid(row=0, column=0, sticky="w")
 
-        self.note_title_entry = ttk.Entry(note_card, textvariable=self.note_title_var, width=44)
-        self.note_title_entry.grid(row=1, column=0, sticky="ew", pady=(4, 6))
-        self.note_title_var.trace_add("write", self.on_note_title_change)
+        editor_frame = ttk.Frame(note_card, style="CardInner.TFrame")
+        editor_frame.grid(row=1, column=0, sticky="ew", pady=(4, 4))
+        editor_frame.columnconfigure(0, weight=1)
 
-        self.note_items_label = ttk.Label(note_card, text=self.t("memo_items"), style="CardLabel.TLabel")
-        self.note_items_label.grid(row=2, column=0, sticky="w")
-
-        items_entry_row = ttk.Frame(note_card, style="CardInner.TFrame")
-        items_entry_row.grid(row=3, column=0, sticky="ew", pady=(4, 6))
-        items_entry_row.columnconfigure(0, weight=1)
-
-        self.note_item_entry = ttk.Entry(items_entry_row, textvariable=self.note_item_entry_var)
-        self.note_item_entry.grid(row=0, column=0, sticky="ew")
-        self.note_item_entry.bind("<Return>", self.on_note_item_enter)
-
-        self.note_item_add_button = ttk.Button(
-            items_entry_row,
-            text=self.t("add_item"),
-            command=self.add_note_item,
+        self.memo_text_widget = tk.Text(
+            editor_frame,
+            height=8,
+            wrap="word",
+            bg=COLOR_CARD,
+            fg=COLOR_TEXT,
+            insertbackground=COLOR_TEXT,
+            highlightthickness=1,
+            highlightbackground=COLOR_BORDER,
+            highlightcolor=COLOR_ACCENT,
+            relief="flat",
+            font=FONT_MONO,
+            undo=True,
         )
-        self.note_item_add_button.grid(row=0, column=1, sticky="e", padx=(8, 0))
+        self.memo_text_widget.grid(row=0, column=0, sticky="ew")
+        self.memo_text_widget.bind("<<Modified>>", self.on_memo_text_modified)
+        self.memo_text_widget.bind("<FocusOut>", self.on_memo_text_focus_out)
 
-        items_list_frame = ttk.Frame(note_card, style="CardInner.TFrame")
-        items_list_frame.grid(row=4, column=0, sticky="ew", pady=(0, 8))
-        items_list_frame.columnconfigure(0, weight=1)
+        self.memo_text_scroll = ttk.Scrollbar(
+            editor_frame,
+            orient="vertical",
+            command=self.memo_text_widget.yview,
+        )
+        self.memo_text_scroll.grid(row=0, column=1, sticky="ns", padx=(6, 0))
+        self.memo_text_widget.configure(yscrollcommand=self.memo_text_scroll.set)
+        self._bind_vertical_mousewheel(self.memo_text_widget, self.memo_text_widget)
 
-        self.note_items_canvas = tk.Canvas(
-            items_list_frame,
-            height=240,
+        self.note_hint_label = ttk.Label(note_card, text=self.t("memo_hint"), style="CardLabel.TLabel")
+        self.note_hint_label.grid(row=2, column=0, sticky="w", pady=(0, 8))
+
+        self.note_preview_label = ttk.Label(note_card, text=self.t("memo_preview"), style="CardLabel.TLabel")
+        self.note_preview_label.grid(row=3, column=0, sticky="w")
+
+        preview_frame = ttk.Frame(note_card, style="CardInner.TFrame")
+        preview_frame.grid(row=4, column=0, sticky="ew", pady=(4, 8))
+        preview_frame.columnconfigure(0, weight=1)
+
+        self.memo_preview_canvas = tk.Canvas(
+            preview_frame,
+            height=180,
             bg=COLOR_CARD,
             highlightthickness=1,
             highlightbackground=COLOR_BORDER,
         )
-        self.note_items_canvas.grid(row=0, column=0, sticky="ew")
+        self.memo_preview_canvas.grid(row=0, column=0, sticky="ew")
 
-        self.note_items_scroll = ttk.Scrollbar(
-            items_list_frame,
+        self.memo_preview_scroll = ttk.Scrollbar(
+            preview_frame,
             orient="vertical",
-            command=self.note_items_canvas.yview,
+            command=self.memo_preview_canvas.yview,
         )
-        self.note_items_scroll.grid(row=0, column=1, sticky="ns", padx=(6, 0))
-        self.note_items_canvas.configure(yscrollcommand=self.note_items_scroll.set)
+        self.memo_preview_scroll.grid(row=0, column=1, sticky="ns", padx=(6, 0))
+        self.memo_preview_canvas.configure(yscrollcommand=self.memo_preview_scroll.set)
 
-        self.note_items_inner = ttk.Frame(self.note_items_canvas, style="CardInner.TFrame")
-        self.note_items_window = self.note_items_canvas.create_window(
+        self.memo_preview_inner = ttk.Frame(self.memo_preview_canvas, style="CardInner.TFrame")
+        self.memo_preview_window = self.memo_preview_canvas.create_window(
             (0, 0),
-            window=self.note_items_inner,
+            window=self.memo_preview_inner,
             anchor="nw",
         )
-        self.note_items_inner.bind("<Configure>", self._on_note_items_configure)
-        self.note_items_canvas.bind("<Configure>", self._on_note_items_canvas_configure)
-
-        self.auto_stage_check = ttk.Checkbutton(
-            note_card,
-            text=self.t("auto_stage"),
-            variable=self.auto_stage_var,
-            command=self.save_settings,
-        )
-        self.auto_stage_check.grid(row=5, column=0, sticky="w", pady=(0, 6))
+        self.memo_preview_inner.bind("<Configure>", self._on_memo_preview_configure)
+        self.memo_preview_canvas.bind("<Configure>", self._on_memo_preview_canvas_configure)
+        self._bind_vertical_mousewheel(self.memo_preview_canvas, self.memo_preview_canvas)
+        self._bind_vertical_mousewheel(self.memo_preview_inner, self.memo_preview_canvas)
 
         note_actions = ttk.Frame(note_card, style="Card.TFrame")
-        note_actions.grid(row=6, column=0, sticky="e")
+        note_actions.grid(row=5, column=0, sticky="e")
+        self.copy_summary_button = ttk.Button(
+            note_actions,
+            text=self.t("copy_summary"),
+            command=self.copy_commit_summary,
+        )
+        self.copy_summary_button.grid(row=0, column=0, sticky="e")
+        self.copy_description_button = ttk.Button(
+            note_actions,
+            text=self.t("copy_description"),
+            command=self.copy_commit_description,
+        )
+        self.copy_description_button.grid(row=0, column=1, sticky="e", padx=(8, 0))
+        self.set_memo_text(self.memo_text_value)
 
-        self.note_save_button = None
-
-        self.render_note_items()
-
+    def _build_controls_section(
+        self,
+        right_area: ttk.Frame,
+        *,
+        saved_custom_today_enabled: bool,
+        saved_today_text: str,
+        saved_auto_refresh: bool,
+    ) -> None:
         self.custom_today_var = tk.BooleanVar(value=saved_custom_today_enabled)
         self.today_entry_var = tk.StringVar(value=saved_today_text)
         controls_section = ttk.Frame(right_area, style="App.TFrame")
@@ -883,14 +961,7 @@ class LineTrackerApp:
         )
         self.auto_refresh_check.grid(row=6, column=0, columnspan=3, sticky="w", pady=(10, 0))
 
-        self.notify_check = ttk.Checkbutton(
-            controls_card,
-            text=self.t("notify_goal"),
-            variable=self.notify_var,
-            command=self.on_notify_toggle,
-        )
-        self.notify_check.grid(row=7, column=0, columnspan=3, sticky="w", pady=(6, 0))
-
+    def _build_footer(self, container: ttk.Frame) -> None:
         footer_frame = ttk.Frame(container, style="App.TFrame")
         footer_frame.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(10, 0))
         footer_frame.columnconfigure(0, weight=1)
@@ -924,9 +995,11 @@ class LineTrackerApp:
         self.copy_button = ttk.Button(footer_right, text=self.t("copy"), command=self.copy_output)
         self.copy_button.grid(row=0, column=1, sticky="e", padx=(8, 0))
 
+    def _finish_startup(self, args: argparse.Namespace, default_today_text: str) -> None:
         self.current_output = ""
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.apply_date_controls_state()
+        self.update_repo_dependent_controls()
         if self.custom_today_var.get():
             try:
                 self.today_override = self.parse_today_entry()
@@ -937,7 +1010,11 @@ class LineTrackerApp:
         if not self.ensure_repo_ready():
             self.root.after(0, self.root.destroy)
             return
-        self.refresh()
+        if self.repo_selected:
+            self.refresh()
+        else:
+            self.refresh_ref_label()
+            self.status_var.set(self.t("status_repo_needed"))
         self.save_settings()
 
     def build_config(self) -> TrackerConfig:
@@ -955,6 +1032,8 @@ class LineTrackerApp:
         )
 
     def format_ref_label(self) -> str:
+        if not self.repo_selected:
+            return self.t("repo_not_selected")
         label = f"{self.repo.name} • {self.ref}"
         current = resolve_current_ref(self.repo)
         self.current_ref = current
@@ -1020,10 +1099,12 @@ class LineTrackerApp:
         self.graph_title.configure(text=self.t("graph_title"))
         self.graph_days_label.configure(text=self.t("graph_period"))
         self.note_title_label.configure(text=self.t("commit_memo"))
-        self.note_title_text_label.configure(text=self.t("memo_title"))
-        self.note_items_label.configure(text=self.t("memo_items"))
-        self.note_item_add_button.configure(text=self.t("add_item"))
-        self.auto_stage_check.configure(text=self.t("auto_stage"))
+        self.note_editor_label.configure(text=self.t("memo_editor"))
+        self.note_hint_label.configure(text=self.t("memo_hint"))
+        self.note_preview_label.configure(text=self.t("memo_preview"))
+        self.copy_summary_button.configure(text=self.t("copy_summary"))
+        self.copy_description_button.configure(text=self.t("copy_description"))
+        self.refresh_memo_preview()
 
         self.controls_title.configure(text=self.t("settings"))
         self.custom_today_check.configure(text=self.t("custom_date"))
@@ -1033,7 +1114,6 @@ class LineTrackerApp:
         self.author_label.configure(text=self.t("author_label"))
         self.author_apply_button.configure(text=self.t("apply_author"))
         self.auto_refresh_check.configure(text=self.t("auto_refresh"))
-        self.notify_check.configure(text=self.t("notify_goal"))
 
         self.progress_title.configure(text=self.t("progress"))
         self.overall_progress_title.configure(text=self.t("overall_progress"))
@@ -1043,10 +1123,7 @@ class LineTrackerApp:
         self.copy_button.configure(text=self.t("copy"))
         self.apply_layout_for_language()
 
-        self.author_options, self.author_filter_map = self.build_author_options()
-        self.author_combo.configure(values=self.author_options)
-        self.author_display = self.map_author_to_display(self.author_raw)
-        self.author_entry_var.set(self.author_display)
+        self.rebuild_author_controls(reset_invalid_to_auto=False)
 
         if self.refresh_in_progress:
             self.loading_var.set(self.t("loading"))
@@ -1068,68 +1145,108 @@ class LineTrackerApp:
         for label in getattr(self, "tile_label_widgets", []):
             label.configure(wraplength=tile_wrap)
 
-        default_width = BASE_WINDOW_WIDTH
+        fitted_width = self.get_fitted_window_width()
         min_height = getattr(self, "min_height", MIN_WINDOW_HEIGHT)
-        self.root.minsize(default_width, min_height)
-        try:
-            current = self.root.winfo_geometry().split("+", 1)[0]
-            w_str, h_str = current.split("x", 1)
-            width = int(w_str)
-            height = int(h_str)
-        except (ValueError, IndexError):
-            return
-        if width < default_width:
-            self.root.geometry(f"{default_width}x{height}")
+        self.root.minsize(fitted_width, min_height)
+        current_geometry = self.normalize_geometry(
+            self.root.winfo_geometry(),
+            min_width=fitted_width,
+            width_override=fitted_width,
+        )
+        if not current_geometry:
+            current_geometry = f"{fitted_width}x{min_height}"
+        self.last_window_geometry = current_geometry
+        self.root.geometry(current_geometry)
 
     def ensure_repo_ready(self) -> bool:
-        try:
-            result = subprocess.run(
-                ["git", "--version"],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                check=False,
-            )
-            if result.returncode != 0:
-                messagebox.showerror("Line Tracker Error", self.t("git_missing"))
-                return False
+        git_version, _, _ = get_git_info()
+        if git_version:
             return True
-        except FileNotFoundError:
-            messagebox.showerror("Line Tracker Error", self.t("git_missing"))
-            return False
+        open_download = messagebox.askyesno(self.t("setup_title"), self.t("git_missing"))
+        if open_download:
+            try:
+                webbrowser.open("https://git-scm.com/download/win")
+            except Exception:
+                pass
+        return False
 
-    def run_setup_check(self) -> None:
-        if not self.ensure_repo_ready():
-            return
-        py_version = sys.version.split()[0]
-        git_version = "unknown"
-        try:
-            out = subprocess.run(
-                ["git", "--version"],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                check=False,
-            )
-            if out.returncode == 0:
-                git_version = out.stdout.strip() or git_version
-        except FileNotFoundError:
-            git_version = "not found"
-        message = self.t("env_report", py=py_version, git=git_version, exe=sys.executable)
-        messagebox.showinfo(self.t("setup_title"), f"{self.t('setup_ok')}\n\n{message}")
+    @staticmethod
+    def _parse_author_identity(identity: str) -> tuple[str | None, str | None]:
+        match = AUTHOR_IDENTITY_RE.fullmatch(identity.strip())
+        if not match:
+            cleaned = identity.strip()
+            return (cleaned or None), None
+        name = match.group("name").strip() or None
+        email = match.group("email").strip() or None
+        return name, email
 
-    def build_author_options(self) -> tuple[list[str], dict[str, str]]:
-        auto_label = self.t("author_auto")
-        all_label = self.t("author_all")
+    @classmethod
+    def _build_author_option_entries(
+        cls,
+        identities: list[str],
+        auto_label: str,
+        all_label: str,
+    ) -> tuple[list[str], dict[str, str], dict[str, str]]:
         options = [auto_label, all_label]
         mapping = {auto_label: "auto", all_label: ""}
+        aliases = {"auto": auto_label, "": all_label}
+        grouped: dict[str, dict[str, list[str] | str]] = {}
+
+        for raw_identity in identities:
+            identity = raw_identity.strip()
+            if not identity:
+                continue
+
+            name, email = cls._parse_author_identity(identity)
+            canonical_source = email or name or identity
+            canonical_key = canonical_source.casefold()
+            group = grouped.get(canonical_key)
+            if group is None:
+                group = {
+                    "display": identity,
+                    "identities": [],
+                    "emails": [],
+                }
+                grouped[canonical_key] = group
+
+            identity_values = group["identities"]
+            email_values = group["emails"]
+            if identity not in identity_values:
+                identity_values.append(identity)
+            if email and email not in email_values:
+                email_values.append(email)
+
+        for group in grouped.values():
+            display = str(group["display"])
+            if display in mapping:
+                continue
+
+            emails = [value for value in group["emails"] if value]
+            identities_for_filter = emails or [value for value in group["identities"] if value]
+            if not identities_for_filter:
+                continue
+
+            filter_value = "|".join(re.escape(value) for value in identities_for_filter)
+            mapping[display] = filter_value
+            options.append(display)
+            aliases[filter_value] = display
+
+            for alias_source in group["identities"]:
+                aliases[re.escape(alias_source)] = display
+            for alias_source in group["emails"]:
+                aliases[re.escape(alias_source)] = display
+
+        return options, mapping, aliases
+
+    def build_author_options(self) -> tuple[list[str], dict[str, str], dict[str, str]]:
+        auto_label = self.t("author_auto")
+        all_label = self.t("author_all")
         try:
             out = run_git(self.repo, ["shortlog", "-sne", "--all"])
         except RuntimeError:
-            return options, mapping
+            return self._build_author_option_entries([], auto_label, all_label)
 
+        identities: list[str] = []
         for raw_line in out.splitlines():
             line = raw_line.strip()
             if not line:
@@ -1142,21 +1259,38 @@ class LineTrackerApp:
                     continue
                 identity = parts[1]
             identity = identity.strip()
-            if not identity or identity in mapping:
-                continue
-            mapping[identity] = re.escape(identity)
-            options.append(identity)
-        return options, mapping
+            if identity:
+                identities.append(identity)
+        return self._build_author_option_entries(identities, auto_label, all_label)
 
     def map_author_to_display(self, author_raw: str) -> str:
         if not author_raw:
             return self.t("author_all")
         if author_raw.lower() == "auto":
             return self.t("author_auto")
+        alias_display = getattr(self, "author_display_aliases", {}).get(author_raw)
+        if alias_display:
+            return alias_display
         for display, filt in self.author_filter_map.items():
             if filt == author_raw:
                 return display
         return author_raw
+
+    def rebuild_author_controls(self, *, reset_invalid_to_auto: bool) -> None:
+        self.author_options, self.author_filter_map, self.author_display_aliases = self.build_author_options()
+        if hasattr(self, "author_combo"):
+            self.author_combo.configure(values=self.author_options)
+
+        if reset_invalid_to_auto and self.author_display not in self.author_filter_map:
+            self.author_display = self.t("author_auto")
+            self.author_raw = "auto"
+        else:
+            self.author_display = self.map_author_to_display(self.author_raw)
+            self.author_raw = self.author_filter_map.get(self.author_display, self.author_raw)
+
+        self.author = resolve_author(self.repo, self.author_raw)
+        if hasattr(self, "author_entry_var"):
+            self.author_entry_var.set(self.author_display)
 
     def refresh_ref_label(self) -> None:
         self.subtitle_label.configure(text=self.format_ref_label())
@@ -1169,46 +1303,103 @@ class LineTrackerApp:
             return default
         return parsed if parsed > 0 else default
 
-    def load_settings(self) -> dict[str, object]:
-        if not self.settings_path.exists():
-            return {}
+    @staticmethod
+    def _parse_geometry(value: str) -> tuple[int, int, int | None, int | None] | None:
+        match = GEOMETRY_RE.fullmatch(value.strip())
+        if not match:
+            return None
+        raw_width = int(match.group("width"))
+        raw_height = int(match.group("height"))
+        pos_x = int(match.group("x")) if match.group("x") is not None else None
+        pos_y = int(match.group("y")) if match.group("y") is not None else None
+        return raw_width, raw_height, pos_x, pos_y
+
+    def get_fitted_window_width(self) -> int:
+        screen_limit = max(640, self.root.winfo_screenwidth() - WINDOW_SCREEN_MARGIN)
         try:
-            raw = self.settings_path.read_text(encoding="utf-8")
-            data = json.loads(raw)
-            if isinstance(data, dict):
-                return data
-            return {}
-        except (OSError, json.JSONDecodeError):
-            return {}
+            self.root.update_idletasks()
+        except tk.TclError:
+            return min(MIN_WINDOW_WIDTH, screen_limit)
+
+        requested_width = 0
+        for widget in (getattr(self, "container", None), self.root):
+            if widget is None:
+                continue
+            try:
+                requested_width = max(requested_width, int(widget.winfo_reqwidth()))
+            except (tk.TclError, TypeError, ValueError):
+                continue
+
+        if requested_width <= 1:
+            requested_width = min(BASE_WINDOW_WIDTH, screen_limit)
+
+        return min(max(requested_width, MIN_WINDOW_WIDTH), screen_limit)
+
+    def normalize_geometry(
+        self,
+        value: str,
+        *,
+        min_width: int | None = None,
+        width_override: int | None = None,
+    ) -> str | None:
+        parsed = self._parse_geometry(value)
+        if not parsed:
+            return None
+        raw_width, raw_height, pos_x, pos_y = parsed
+        target_min_width = max(min_width or MIN_WINDOW_WIDTH, MIN_WINDOW_WIDTH)
+        screen_limit = max(640, self.root.winfo_screenwidth() - WINDOW_SCREEN_MARGIN)
+        width = width_override if width_override is not None else raw_width
+        width = min(max(width, target_min_width), screen_limit)
+        height = max(raw_height, MIN_WINDOW_HEIGHT)
+        if pos_x is None or pos_y is None or raw_width < target_min_width or raw_height < MIN_WINDOW_HEIGHT:
+            return f"{width}x{height}"
+        return f"{width}x{height}{pos_x:+d}{pos_y:+d}"
+
+    def get_persisted_geometry(self) -> str:
+        default_geometry = f"{BASE_WINDOW_WIDTH}x{BASE_WINDOW_HEIGHT}"
+        try:
+            if self.root.state() == "iconic":
+                return self.last_window_geometry
+        except tk.TclError:
+            return self.last_window_geometry
+        geometry = self.normalize_geometry(self.root.winfo_geometry())
+        if geometry:
+            self.last_window_geometry = geometry
+            return geometry
+        return self.last_window_geometry or default_geometry
+
+    def load_settings(self) -> UISettings:
+        for candidate in (self.settings_path, self.legacy_settings_path):
+            if not candidate.exists():
+                continue
+            try:
+                raw = candidate.read_text(encoding="utf-8")
+                data = json.loads(raw)
+                if isinstance(data, dict):
+                    return UISettings.from_dict(data)
+            except (OSError, json.JSONDecodeError):
+                continue
+        return UISettings()
 
     def save_settings(self) -> None:
-        note_title = self.note_title_var.get().strip() if hasattr(self, "note_title_var") else ""
-        note_items: list[dict[str, object]] = []
-        if hasattr(self, "note_items"):
-            for entry in self.note_items:
-                text = str(entry.get("text", "")).strip()
-                if text:
-                    note_items.append({"text": text, "done": bool(entry.get("done"))})
-        data = {
-            "goal": self.goal,
-            "custom_today_enabled": self.custom_today_var.get(),
-            "custom_today": self.today_entry_var.get().strip(),
-            "graph_days": self.graph_days_var.get(),
-            "auto_refresh": self.auto_refresh_var.get(),
-            "notify_on_goal": self.notify_var.get(),
-            "last_notify_date": self.last_notify_date,
-            "author": self.author_raw,
-            "author_display": self.author_display,
-            "note_title": note_title,
-            "note_items": note_items,
-            "auto_stage": self.auto_stage_var.get() if hasattr(self, "auto_stage_var") else False,
-            "repo_path": str(self.repo),
-            "lang": self.lang,
-            "geometry": self.root.winfo_geometry(),
-        }
+        memo_text = self.get_memo_text() if hasattr(self, "memo_text_widget") else self.memo_text_value
+        self.settings = UISettings(
+            goal=self.goal,
+            custom_today_enabled=self.custom_today_var.get(),
+            custom_today=self.today_entry_var.get().strip(),
+            graph_days=self.graph_days_var.get(),
+            auto_refresh=self.auto_refresh_var.get(),
+            author=self.author_raw,
+            author_display=self.author_display,
+            memo_text=memo_text,
+            repo_path=str(self.repo) if self.repo_selected else "",
+            lang=self.lang,
+            geometry=self.get_persisted_geometry(),
+        )
         try:
+            self.settings_path.parent.mkdir(parents=True, exist_ok=True)
             self.settings_path.write_text(
-                json.dumps(data, ensure_ascii=False, indent=2),
+                json.dumps(self.settings.to_dict(), ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
         except OSError:
@@ -1236,6 +1427,16 @@ class LineTrackerApp:
         self.today_entry.configure(state=state)
         self.today_apply_button.configure(state=state)
 
+    def update_repo_dependent_controls(self) -> None:
+        repo_state = "normal" if self.repo_selected else "disabled"
+        if not self.repo_selected and self.auto_refresh_var.get():
+            self.auto_refresh_var.set(False)
+        if not self.repo_selected:
+            self.cancel_auto_refresh()
+        self.auto_refresh_check.configure(state=repo_state)
+        refresh_state = "normal" if self.repo_selected and not self.refresh_in_progress else "disabled"
+        self.refresh_button.configure(state=refresh_state)
+
     def set_loading_state(self, loading: bool) -> None:
         if loading:
             self.loading_var.set(self.t("loading"))
@@ -1247,9 +1448,15 @@ class LineTrackerApp:
         self.loading_bar.stop()
         self.loading_var.set(" ")
         self.loading_bar.grid_remove()
-        self.refresh_button.configure(state="normal")
+        self.update_repo_dependent_controls()
 
     def refresh(self) -> None:
+        if not self.repo_selected:
+            self.cancel_auto_refresh()
+            self.refresh_ref_label()
+            self.status_var.set(self.t("status_repo_needed"))
+            self.update_repo_dependent_controls()
+            return
         if self.refresh_in_progress:
             if self.auto_refresh_var.get():
                 self.schedule_auto_refresh()
@@ -1272,77 +1479,8 @@ class LineTrackerApp:
 
     def _refresh_worker(self, request_id: int, config: TrackerConfig, graph_days: int) -> None:
         try:
-            result = compute_metrics(config)
-            current_ref = resolve_current_ref(self.repo)
-            branch_committed = 0
-            if current_ref != config.ref:
-                branch_committed = get_committed_insertions(
-                    self.repo,
-                    config.ref,
-                    self.author,
-                    current_ref,
-                )
-            branch_total = branch_committed
-
-            base_commit = resolve_base_commit(self.repo, result.today, config.base_commit, config.ref)
-            all_base_total = get_total_insertions_up_to(self.repo, base_commit, "")
-            all_committed = get_committed_insertions(self.repo, base_commit, "", config.ref)
-            if config.include_local and current_ref != config.ref:
-                all_committed += get_committed_insertions(self.repo, config.ref, "", current_ref)
-            all_committed_total = all_base_total + all_committed
-
-            committed_today = get_committed_insertions_for_date_combined(
-                self.repo,
-                result.today,
-                self.author,
-                config.ref,
-                config.include_local,
-            )
-            today_real = dt.date.today()
-            today_done = committed_today + result.uncommitted_insertions
-
-            today_target = result.need_today
-            end_day = result.today
-            start_day = end_day - dt.timedelta(days=graph_days - 1)
-            committed_by_date = get_committed_insertions_by_date_combined(
-                self.repo,
-                start_day,
-                end_day,
-                self.author,
-                config.ref,
-                config.include_local,
-            )
-            points: list[tuple[dt.date, int]] = []
-            for i in range(graph_days):
-                day = start_day + dt.timedelta(days=i)
-                value = committed_by_date.get(day, 0)
-                if day == end_day and day == today_real:
-                    value += result.uncommitted_insertions
-                points.append((day, value))
-
-            values = [v for _, v in points]
-            graph_max = max(values) if values else 0
-            graph_avg = (sum(values) / len(values)) if values else 0.0
-            my_committed_total = result.committed_total
-            if all_committed_total > 0:
-                share_percent = (my_committed_total / all_committed_total) * 100.0
-            else:
-                share_percent = 0.0
-            share_text = f"{share_percent:.1f}%"
-
-            payload = {
-                "result": result,
-                "today_done": today_done,
-                "today_target": today_target,
-                "points": points,
-                "graph_days": graph_days,
-                "graph_avg": graph_avg,
-                "graph_max": graph_max,
-                "branch_total": branch_total,
-                "share_text": share_text,
-                "uncommitted_deletions": get_uncommitted_deletions(self.repo),
-            }
-            self.safe_after(lambda p=payload: self._on_refresh_success(request_id, p))
+            snapshot = build_refresh_snapshot(self.repo, self.author, config, graph_days)
+            self.safe_after(lambda s=snapshot: self._on_refresh_success(request_id, s))
         except Exception as exc:  # pragma: no cover
             self.safe_after(lambda e=str(exc): self._on_refresh_error(request_id, e))
 
@@ -1352,34 +1490,25 @@ class LineTrackerApp:
         except tk.TclError:
             pass
 
-    def _on_refresh_success(self, request_id: int, payload: dict[str, object]) -> None:
+    def _on_refresh_success(self, request_id: int, snapshot: RefreshSnapshot) -> None:
         if request_id != self.refresh_request_id:
             return
 
         self.refresh_in_progress = False
         self.set_loading_state(False)
 
-        result = payload["result"]
-        today_done = int(payload["today_done"])
-        today_target = int(payload["today_target"])
-        points = payload["points"]
-        graph_days = int(payload["graph_days"])
-        graph_avg = float(payload["graph_avg"])
-        graph_max = int(payload["graph_max"])
-        branch_total = int(payload.get("branch_total", 0))
-        share_text = str(payload.get("share_text", ""))
-        uncommitted_deletions = int(payload.get("uncommitted_deletions", 0))
+        result = snapshot.result
+        branch_total = snapshot.branch_total
         self.branch_total_committed = branch_total
         self.main_total_committed = max(result.committed_total - branch_total, 0)
 
-        lines = self.format_output_lines(result)  # type: ignore[arg-type]
+        lines = self.format_output_lines(result)
         self.current_output = "\n".join(lines)
-        self.set_output_lines(result, branch_total, share_text)
+        self.set_output_lines(result, branch_total, snapshot.share_text)
         self.delta_added_var.set(f"+{result.uncommitted_insertions:,}")
-        self.delta_removed_var.set(f"-{uncommitted_deletions:,}")
-        self.update_progress(result, today_done, today_target)  # type: ignore[arg-type]
-        self.update_graph(points, result.today, graph_days, graph_avg, graph_max)  # type: ignore[arg-type]
-        self.maybe_notify(result, today_done, today_target)  # type: ignore[arg-type]
+        self.delta_removed_var.set(f"-{snapshot.uncommitted_deletions:,}")
+        self.update_progress(result, snapshot.today_done, snapshot.today_target)
+        self.update_graph(snapshot.points, result.today, snapshot.graph_days, snapshot.graph_avg, snapshot.graph_max)
 
         status_suffix = self.t("status_auto_suffix") if self.auto_refresh_var.get() else ""
         self.status_var.set(self.t("status_updated", time=dt.datetime.now().strftime("%H:%M:%S")) + status_suffix)
@@ -1398,9 +1527,12 @@ class LineTrackerApp:
     def copy_output(self) -> None:
         if not self.current_output:
             return
+        self.copy_to_clipboard(self.current_output, "status_clipboard")
+
+    def copy_to_clipboard(self, text: str, status_key: str = "status_clipboard") -> None:
         self.root.clipboard_clear()
-        self.root.clipboard_append(self.current_output)
-        self.status_var.set(self.t("status_clipboard"))
+        self.root.clipboard_append(text)
+        self.status_var.set(self.t(status_key))
 
     def update_progress(self, result: TrackerResult, today_done: int, today_target: int) -> None:
         current_total = self.main_total_committed + self.branch_total_committed + result.uncommitted_insertions
@@ -1571,199 +1703,221 @@ class LineTrackerApp:
     def on_repo_entry_enter(self, _: tk.Event) -> None:
         self.apply_repo_path()
 
+    def memo_labels(self) -> MemoLabels:
+        return MemoLabels(
+            template_title=self.t("memo_template_title"),
+            done_label=self.t("done"),
+            todo_label=self.t("todo"),
+        )
+
+    def default_memo_text(self) -> str:
+        return default_memo_text(self.memo_labels())
+
     @staticmethod
-    def _strip_bullet(text: str) -> str:
-        cleaned = text.strip()
-        if cleaned.startswith(("-", "*", "•")):
-            return cleaned[1:].lstrip()
-        return cleaned
+    def _normalize_mousewheel_delta(event: tk.Event) -> int:
+        delta = int(getattr(event, "delta", 0) or 0)
+        if delta:
+            steps = delta // 120 if abs(delta) >= 120 else (1 if delta > 0 else -1)
+            return -steps
+        button_num = int(getattr(event, "num", 0) or 0)
+        if button_num == 4:
+            return -1
+        if button_num == 5:
+            return 1
+        return 0
 
-    def _coerce_note_items(self, raw: object) -> list[dict[str, object]]:
-        items: list[dict[str, object]] = []
-        if isinstance(raw, list):
-            for entry in raw:
-                if isinstance(entry, dict):
-                    text = str(entry.get("text", "")).strip()
-                    if text:
-                        items.append({"text": text, "done": bool(entry.get("done"))})
-                elif isinstance(entry, str):
-                    text = entry.strip()
-                    if text:
-                        items.append({"text": text, "done": False})
-        return items
+    def _bind_vertical_mousewheel(self, widget: tk.Misc, target: tk.Misc) -> None:
+        widget.bind("<MouseWheel>", lambda event, scroll_target=target: self._on_mousewheel(event, scroll_target), add="+")
+        widget.bind("<Button-4>", lambda event, scroll_target=target: self._on_mousewheel(event, scroll_target), add="+")
+        widget.bind("<Button-5>", lambda event, scroll_target=target: self._on_mousewheel(event, scroll_target), add="+")
 
-    def _legacy_notes_to_items(self, done_raw: str, todo_raw: str) -> list[dict[str, object]]:
-        items: list[dict[str, object]] = []
-        for line in done_raw.splitlines():
-            text = self._strip_bullet(line)
-            if text:
-                items.append({"text": text, "done": True})
-        for line in todo_raw.splitlines():
-            text = self._strip_bullet(line)
-            if text:
-                items.append({"text": text, "done": False})
-        return items
+    def _on_mousewheel(self, event: tk.Event, target: tk.Misc) -> str | None:
+        delta = self._normalize_mousewheel_delta(event)
+        if delta == 0:
+            return None
+        target.yview_scroll(delta, "units")
+        return "break"
 
-    def _on_note_items_configure(self, _: tk.Event) -> None:
-        if hasattr(self, "note_items_canvas"):
-            self.note_items_canvas.configure(scrollregion=self.note_items_canvas.bbox("all"))
+    def get_memo_text(self) -> str:
+        if hasattr(self, "memo_text_widget"):
+            self.memo_text_value = self.memo_text_widget.get("1.0", "end-1c").rstrip("\n")
+        return self.memo_text_value
 
-    def _on_note_items_canvas_configure(self, event: tk.Event) -> None:
-        if hasattr(self, "note_items_canvas") and hasattr(self, "note_items_window"):
-            self.note_items_canvas.itemconfigure(self.note_items_window, width=event.width)
+    def set_memo_text(self, raw_text: str, *, save: bool = False) -> None:
+        self.memo_text_value = raw_text.rstrip("\n")
+        if save and self.memo_autosave_job:
+            self.root.after_cancel(self.memo_autosave_job)
+            self.memo_autosave_job = None
+        if hasattr(self, "memo_text_widget"):
+            self.memo_widget_updating = True
+            self.memo_text_widget.delete("1.0", "end")
+            if self.memo_text_value:
+                self.memo_text_widget.insert("1.0", self.memo_text_value)
+            self.memo_text_widget.edit_modified(False)
+            self.memo_widget_updating = False
+        self.refresh_memo_preview()
+        if save:
+            self.save_settings()
 
-    def render_note_items(self) -> None:
-        if not hasattr(self, "note_items_inner"):
+    def on_memo_text_modified(self, _: tk.Event | None = None) -> None:
+        if self.memo_widget_updating or not hasattr(self, "memo_text_widget"):
             return
-        for child in self.note_items_inner.winfo_children():
+        if not self.memo_text_widget.edit_modified():
+            return
+        self.memo_text_widget.edit_modified(False)
+        self.memo_text_value = self.get_memo_text()
+        self.refresh_memo_preview()
+        if self.memo_autosave_job:
+            self.root.after_cancel(self.memo_autosave_job)
+        self.memo_autosave_job = self.root.after(400, self._memo_autosave)
+
+    def on_memo_text_focus_out(self, _: tk.Event | None = None) -> None:
+        if self.memo_widget_updating:
+            return
+        self.normalize_memo_text(save=True)
+
+    def _memo_autosave(self) -> None:
+        self.memo_autosave_job = None
+        self.normalize_memo_text(save=True)
+
+    def normalize_memo_text(self, *, save: bool) -> None:
+        normalized_text = normalize_loaded_memo_text(self.get_memo_text(), self.memo_labels())
+        if normalized_text != self.memo_text_value or normalized_text != self.get_memo_text():
+            self.set_memo_text(normalized_text, save=save)
+            return
+        self.memo_text_value = normalized_text
+        if save:
+            self.save_settings()
+
+    def _on_memo_preview_configure(self, _: tk.Event) -> None:
+        if hasattr(self, "memo_preview_canvas"):
+            self.memo_preview_canvas.configure(scrollregion=self.memo_preview_canvas.bbox("all"))
+
+    def _on_memo_preview_canvas_configure(self, event: tk.Event) -> None:
+        if hasattr(self, "memo_preview_canvas") and hasattr(self, "memo_preview_window"):
+            self.memo_preview_canvas.itemconfigure(self.memo_preview_window, width=event.width)
+
+    def refresh_memo_preview(self) -> None:
+        if not hasattr(self, "memo_preview_inner"):
+            return
+
+        for child in self.memo_preview_inner.winfo_children():
             child.destroy()
-        self.note_item_vars = []
-        for idx, item in enumerate(self.note_items):
-            row = ttk.Frame(self.note_items_inner, style="CardInner.TFrame")
-            row.grid(row=idx, column=0, sticky="ew", pady=(0, 6))
-            row.columnconfigure(0, weight=1)
+        self.memo_preview_inner.columnconfigure(0, weight=1)
 
-            var = tk.BooleanVar(value=bool(item.get("done")))
-            self.note_item_vars.append(var)
-            check = ttk.Checkbutton(
-                row,
-                text=str(item.get("text", "")),
-                variable=var,
-                command=lambda i=idx, v=var: self.on_note_item_toggle(i, v),
+        memo_state = parse_memo_text(self.get_memo_text())
+        row_index = 0
+
+        title_label = ttk.Label(self.memo_preview_inner, text=self.t("memo_title"), style="CardLabel.TLabel")
+        title_label.grid(row=row_index, column=0, sticky="w")
+        self._bind_vertical_mousewheel(title_label, self.memo_preview_canvas)
+        row_index += 1
+
+        title_value = memo_state.title if memo_state.title else self.t("memo_empty")
+        title_value_label = ttk.Label(
+            self.memo_preview_inner,
+            text=title_value,
+            style="CardTitle.TLabel",
+            wraplength=300,
+            justify="left",
+        )
+        title_value_label.grid(row=row_index, column=0, sticky="ew", pady=(4, 0))
+        self._bind_vertical_mousewheel(title_value_label, self.memo_preview_canvas)
+        row_index += 1
+
+        row_index = self._render_memo_section(self.memo_preview_inner, row_index, "done", memo_state.done_items)
+        self._render_memo_section(self.memo_preview_inner, row_index, "todo", memo_state.todo_items)
+
+    def _render_memo_section(
+        self,
+        parent: ttk.Frame,
+        row_index: int,
+        section: str,
+        items: list[str],
+    ) -> int:
+        heading = ttk.Label(parent, text=self.t(section), style="CardLabel.TLabel")
+        heading.grid(row=row_index, column=0, sticky="w", pady=(12, 0))
+        self._bind_vertical_mousewheel(heading, self.memo_preview_canvas)
+        row_index += 1
+
+        if not items:
+            empty_label = ttk.Label(parent, text=self.t("memo_empty"), style="CardLabel.TLabel")
+            empty_label.grid(row=row_index, column=0, sticky="w", pady=(4, 0))
+            self._bind_vertical_mousewheel(empty_label, self.memo_preview_canvas)
+            return row_index + 1
+
+        button_key = "move_to_todo" if section == "done" else "move_to_done"
+        for idx, item_text in enumerate(items):
+            item_row = ttk.Frame(parent, style="CardInner.TFrame")
+            item_row.grid(row=row_index, column=0, sticky="ew", pady=(4, 0))
+            item_row.columnconfigure(0, weight=1)
+            self._bind_vertical_mousewheel(item_row, self.memo_preview_canvas)
+
+            item_label = ttk.Label(
+                item_row,
+                text=f"- {item_text}",
+                style="CardTitle.TLabel",
+                wraplength=250,
+                justify="left",
             )
-            check.grid(row=0, column=0, sticky="w")
+            item_label.grid(row=0, column=0, sticky="w")
+            self._bind_vertical_mousewheel(item_label, self.memo_preview_canvas)
 
-            remove_btn = ttk.Button(
-                row,
-                text=self.t("remove_item"),
-                command=lambda i=idx: self.remove_note_item(i),
+            move_button = ttk.Button(
+                item_row,
+                text=self.t(button_key),
+                command=lambda s=section, i=idx: self.move_memo_item(s, i),
             )
-            remove_btn.grid(row=0, column=1, sticky="e", padx=(8, 0))
+            move_button.grid(row=0, column=1, sticky="e", padx=(8, 0))
+            self._bind_vertical_mousewheel(move_button, self.memo_preview_canvas)
+            row_index += 1
 
-    def on_note_item_toggle(self, idx: int, var: tk.BooleanVar) -> None:
-        if 0 <= idx < len(self.note_items):
-            self.note_items[idx]["done"] = bool(var.get())
-            self.save_settings()
+        return row_index
 
-    def remove_note_item(self, idx: int) -> None:
-        if 0 <= idx < len(self.note_items):
-            self.note_items.pop(idx)
-            self.render_note_items()
-            self.save_settings()
-
-    def add_note_item(self) -> None:
-        text = self.note_item_entry_var.get().strip()
-        if not text:
+    def move_memo_item(self, section: str, index: int) -> None:
+        memo_state = parse_memo_text(self.get_memo_text())
+        next_state = move_memo_item_between_sections(memo_state, section, index)
+        if next_state == memo_state:
             return
-        cleaned = self._strip_bullet(text)
-        if not cleaned:
-            return
-        self.note_items.append({"text": cleaned, "done": False})
-        self.note_item_entry_var.set("")
-        self.render_note_items()
-        self.save_settings()
-
-    def on_note_item_enter(self, _: tk.Event) -> None:
-        self.add_note_item()
-
-    def on_note_title_change(self, *_: object) -> None:
-        if self.note_autosave_job:
-            self.root.after_cancel(self.note_autosave_job)
-        self.note_autosave_job = self.root.after(400, self._commit_note_autosave)
-
-    def _commit_note_autosave(self) -> None:
-        self.note_autosave_job = None
-        self.save_settings()
+        self.set_memo_text(
+            build_memo_text(
+                next_state,
+                self.memo_labels(),
+                include_placeholders=True,
+            ),
+            save=True,
+        )
 
     @staticmethod
-    def _normalize_bullets(lines: Iterable[str]) -> list[str]:
-        cleaned: list[str] = []
-        for raw in lines:
-            text = raw.strip()
-            if not text:
-                continue
-            if text.startswith(("-", "*", "•")):
-                cleaned.append(text)
-            else:
-                cleaned.append(f"- {text}")
-        return cleaned
+    def _placeholder_memo_titles() -> set[str]:
+        return get_placeholder_titles(
+            [
+                str(lang_text.get("memo_template_title", "")).strip()
+                for lang_text in TEXT.values()
+            ]
+        )
 
-    def build_commit_message(self) -> str:
-        title = self.note_title_var.get().strip()
-        done_lines: list[str] = []
-        todo_lines: list[str] = []
-        for entry in getattr(self, "note_items", []):
-            text = self._strip_bullet(str(entry.get("text", "")))
-            if not text:
-                continue
-            line = f"- {text}"
-            if entry.get("done"):
-                done_lines.append(line)
-            else:
-                todo_lines.append(line)
+    def get_commit_summary_and_description(self, *, require_real_title: bool) -> tuple[str, str]:
+        memo_state = parse_memo_text(self.get_memo_text())
+        if require_real_title and (not memo_state.title or memo_state.title in self._placeholder_memo_titles()):
+            raise ValueError(self.t("error_need_title"))
+        return split_commit_message(memo_state, self.memo_labels())
 
-        parts = [title, "", self.t("done")]
-        if done_lines:
-            parts.extend(done_lines)
-        parts.append("")
-        parts.append(self.t("todo"))
-        if todo_lines:
-            parts.extend(todo_lines)
-        return "\n".join(parts).strip() + "\n"
-
-    def commit_notes(self) -> None:
-        title = self.note_title_var.get().strip()
-        if not title:
-            messagebox.showerror("Line Tracker Error", self.t("error_need_title"))
+    def copy_commit_summary(self) -> None:
+        try:
+            summary, _ = self.get_commit_summary_and_description(require_real_title=True)
+        except ValueError as exc:
+            messagebox.showerror("Line Tracker Error", str(exc))
             return
+        self.copy_to_clipboard(summary, "status_summary_copied")
 
-        commit_message = self.build_commit_message()
-        auto_stage = self.auto_stage_var.get() if hasattr(self, "auto_stage_var") else False
-
-        def worker() -> None:
-            try:
-                kwargs: dict[str, object] = {
-                    "cwd": self.repo,
-                    "capture_output": True,
-                    "text": True,
-                    "encoding": "utf-8",
-                    "errors": "replace",
-                    "check": False,
-                    "input": None,
-                }
-                if hasattr(subprocess, "CREATE_NO_WINDOW"):
-                    kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-
-                if auto_stage:
-                    add = subprocess.run(["git", "add", "-A"], **kwargs)
-                    if add.returncode != 0:
-                        raise RuntimeError(add.stderr.strip() or "git add failed")
-
-                kwargs["input"] = commit_message
-                commit = subprocess.run(["git", "commit", "-F", "-"], **kwargs)
-                if commit.returncode != 0:
-                    raise RuntimeError(commit.stderr.strip() or "git commit failed")
-
-                self.safe_after(self._on_commit_success)
-            except Exception as exc:  # pragma: no cover
-                self.safe_after(lambda e=str(exc): self._on_commit_error(e))
-
-        if hasattr(self, "commit_button"):
-            self.commit_button.configure(state="disabled")
-        self.status_var.set(self.t("status_commit_start"))
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _on_commit_success(self) -> None:
-        if hasattr(self, "commit_button"):
-            self.commit_button.configure(state="normal")
-        self.status_var.set(self.t("status_commit_ok"))
-        self.refresh()
-
-    def _on_commit_error(self, error_message: str) -> None:
-        if hasattr(self, "commit_button"):
-            self.commit_button.configure(state="normal")
-        self.status_var.set(self.t("status_commit_fail"))
-        messagebox.showerror("Line Tracker Error", error_message)
+    def copy_commit_description(self) -> None:
+        try:
+            _, description = self.get_commit_summary_and_description(require_real_title=True)
+        except ValueError as exc:
+            messagebox.showerror("Line Tracker Error", str(exc))
+            return
+        self.copy_to_clipboard(description, "status_description_copied")
 
     def on_graph_days_change(self, _: tk.Event) -> None:
         self.save_settings()
@@ -1822,70 +1976,47 @@ class LineTrackerApp:
     def apply_repo_path(self) -> None:
         raw_input = self.repo_entry_var.get().strip()
         if not raw_input:
+            self.repo_selected = False
+            self.refresh_ref_label()
+            self.status_var.set(self.t("status_repo_needed"))
+            self.update_repo_dependent_controls()
+            self.save_settings()
             return
         path = Path(raw_input).expanduser()
         if not path.exists():
             messagebox.showerror("Line Tracker Error", self.t("error_repo_missing"))
             return
-        repo = find_repo_root(path).resolve()
-        try:
-            run_git(repo, ["rev-parse", "--is-inside-work-tree"])
-        except RuntimeError:
+        repo = self.resolve_valid_repo(path)
+        if repo is None:
             messagebox.showerror("Line Tracker Error", self.t("error_repo_invalid"))
             return
-        if repo == self.repo:
+        if self.repo_selected and repo == self.repo:
+            self.repo_entry_var.set(str(self.repo))
             return
         self.repo = repo
+        self.repo_selected = True
         self.repo_entry_var.set(str(self.repo))
         self.ref = "auto"
-        self.author_options, self.author_filter_map = self.build_author_options()
-        self.author_combo.configure(values=self.author_options)
-        if self.author_display not in self.author_filter_map:
-            self.author_display = self.t("author_auto")
-            self.author_raw = "auto"
-            self.author_entry_var.set(self.author_display)
-        self.author = resolve_author(self.repo, self.author_raw)
+        self.rebuild_author_controls(reset_invalid_to_auto=True)
         clear_cache_for_repo(self.repo)
+        self.update_repo_dependent_controls()
         self.save_settings()
         self.refresh()
 
     def on_auto_refresh_toggle(self) -> None:
+        if not self.repo_selected:
+            self.auto_refresh_var.set(False)
+            self.cancel_auto_refresh()
+            self.status_var.set(self.t("status_repo_needed"))
+            self.update_repo_dependent_controls()
+            self.save_settings()
+            return
         self.save_settings()
         if self.auto_refresh_var.get():
             self.refresh()
             return
         self.cancel_auto_refresh()
         self.status_var.set(self.t("status_auto_off"))
-
-    def on_notify_toggle(self) -> None:
-        self.save_settings()
-        if self.notify_var.get():
-            self.status_var.set(self.t("notify_on"))
-        else:
-            self.status_var.set(self.t("notify_off"))
-
-    def maybe_notify(self, result: TrackerResult, today_done: int, today_target: int) -> None:
-        if not self.notify_var.get():
-            return
-        if result.today != dt.date.today():
-            return
-        if today_target <= 0:
-            return
-        if today_done < today_target:
-            return
-        notify_date = result.today.isoformat()
-        if notify_date == self.last_notify_date:
-            return
-        self.last_notify_date = notify_date
-        self.save_settings()
-        title = self.t("toast_title")
-        message = self.t(
-            "toast_message",
-            date=notify_date,
-            target=f"{today_target:,}",
-            done=f"{today_done:,}",
-        )
-        show_windows_toast(title, message)
 
     def schedule_auto_refresh(self) -> None:
         self.cancel_auto_refresh()

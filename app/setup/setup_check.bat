@@ -4,125 +4,89 @@ if /I "%~1" NEQ "run" (
   start "" cmd /k ""%~f0" run"
   exit /b
 )
+
 title Line Tracker Setup
 set "LOG=%TEMP%\line_tracker_setup.log"
+set "APP_ROOT=%~dp0.."
+set "APP_EXE=%APP_ROOT%\LineTracker.exe"
+set "SOURCE_LAUNCHER=%APP_ROOT%\line_tracker_ui_click.vbs"
+set "BUNDLED_GIT=%APP_ROOT%\PortableGit\cmd\git.exe"
+set "APP_TARGET="
+set "APP_MODE="
+set "GIT_CMD="
+set "GIT_SOURCE="
+
 echo [Line Tracker] Setup log: %LOG%
-echo [%DATE% %TIME%] Started >> "%LOG%"
+echo [%DATE% %TIME%] Started > "%LOG%"
+
+if exist "%APP_EXE%" (
+  set "APP_TARGET=%APP_EXE%"
+  set "APP_MODE=Bundled EXE"
+) else if exist "%SOURCE_LAUNCHER%" (
+  set "APP_TARGET=%SOURCE_LAUNCHER%"
+  set "APP_MODE=Source launcher (Python required)"
+)
+
+if exist "%BUNDLED_GIT%" (
+  set "GIT_CMD=%BUNDLED_GIT%"
+  set "GIT_SOURCE=Bundled PortableGit"
+) else (
+  git --version >nul 2>nul
+  if not errorlevel 1 (
+    set "GIT_CMD=git"
+    set "GIT_SOURCE=System PATH"
+  )
+)
+
+>>"%LOG%" echo App mode: %APP_MODE%
+>>"%LOG%" echo Git source: %GIT_SOURCE%
 
 echo ============================
-echo  Line Tracker Setup (CMD)
+echo  Line Tracker Setup
 echo ============================
 echo.
 
-set "PY_CMD="
-set "PY_ARGS="
-set "PY_MISSING=0"
-set "GIT_MISSING=0"
-set "TK_MISSING=0"
-
-py -3 --version >nul 2>nul
-if not errorlevel 1 (
-  set "PY_CMD=py"
-  set "PY_ARGS=-3"
-)
-if not defined PY_CMD (
-  python --version >nul 2>nul
-  if not errorlevel 1 set "PY_CMD=python"
-)
-if not defined PY_CMD (
-  pythonw --version >nul 2>nul
-  if not errorlevel 1 set "PY_CMD=pythonw"
-)
-if not defined PY_CMD (
-  for /d %%D in ("%LocalAppData%\Programs\Python\Python*") do (
-    if exist "%%D\python.exe" (
-      set "PY_CMD=%%D\python.exe"
-      goto :py_found
-    )
-  )
-  for /d %%D in ("%ProgramFiles%\Python*") do (
-    if exist "%%D\python.exe" (
-      set "PY_CMD=%%D\python.exe"
-      goto :py_found
-    )
-  )
-  for /d %%D in ("%ProgramFiles(x86)%\Python*") do (
-    if exist "%%D\python.exe" (
-      set "PY_CMD=%%D\python.exe"
-      goto :py_found
-    )
-  )
-  if exist "%UserProfile%\anaconda3\python.exe" set "PY_CMD=%UserProfile%\anaconda3\python.exe"
-  if exist "%UserProfile%\miniconda3\python.exe" set "PY_CMD=%UserProfile%\miniconda3\python.exe"
-)
-:py_found
-if not defined PY_CMD (
-  set "PY_MISSING=1"
-)
->>"%LOG%" echo Python missing: %PY_MISSING%
-
-git --version >nul 2>nul
-if errorlevel 1 (
-  set "GIT_MISSING=1"
-)
->>"%LOG%" echo Git missing: %GIT_MISSING%
-
-echo Python:
-if "%PY_MISSING%"=="1" (
-  echo   NOT FOUND
-  >>"%LOG%" echo Python: NOT FOUND
+echo App:
+if defined APP_TARGET (
+  echo   OK - %APP_MODE%
 ) else (
-  "%PY_CMD%" %PY_ARGS% --version
-  >>"%LOG%" echo Python: OK
+  echo   NOT FOUND
 )
 echo.
 
 echo Git:
-if "%GIT_MISSING%"=="1" (
+if defined GIT_CMD (
+  "%GIT_CMD%" --version
+  echo   Source: %GIT_SOURCE%
+) else (
   echo   NOT FOUND
-  >>"%LOG%" echo Git: NOT FOUND
-) else (
-  git --version
-  >>"%LOG%" echo Git: OK
 )
 echo.
 
-echo Tkinter:
-if "%PY_MISSING%"=="1" (
-  echo   (skipped - python missing)
-  set "TK_MISSING=1"
-  >>"%LOG%" echo Tkinter: SKIPPED
-) else (
-  "%PY_CMD%" %PY_ARGS% -c "import tkinter; print('tkinter OK')" 2>nul
-  if errorlevel 1 (
-    echo   NOT FOUND
-    set "TK_MISSING=1"
-    >>"%LOG%" echo Tkinter: NOT FOUND
-  ) else (
-    >>"%LOG%" echo Tkinter: OK
-  )
-)
-echo.
-
-if "%PY_MISSING%"=="0" if "%GIT_MISSING%"=="0" if "%TK_MISSING%"=="0" (
-  echo All OK.
+if defined APP_TARGET if defined GIT_CMD (
+  echo Ready to run.
   echo.
   echo Launch Line Tracker now? (Y/N)
   set /p RUNAPP=^> 
   if /I "%RUNAPP%"=="Y" (
-    call "%~dp0..\line_tracker_ui_click.vbs"
+    start "" "%APP_TARGET%"
   )
   goto :end
 )
 
-echo One or more items are missing.
-echo Open install pages? (Y/N)
-set /p OPENPAGES=^> 
-if /I "%OPENPAGES%"=="Y" (
-  if "%PY_MISSING%"=="1" (
-    start "" "https://www.python.org/downloads/"
-  )
-  if "%GIT_MISSING%"=="1" (
+if not defined APP_TARGET (
+  echo App executable or launcher not found.
+  echo Reinstall Line Tracker or rebuild the package.
+  echo.
+)
+
+if not defined GIT_CMD (
+  echo Git is missing.
+  echo Install Git for Windows, or rebuild the installer with vendor\PortableGit bundled.
+  echo.
+  echo Open Git for Windows download page? (Y/N)
+  set /p OPENPAGES=^> 
+  if /I "%OPENPAGES%"=="Y" (
     start "" "https://git-scm.com/download/win"
   )
 )

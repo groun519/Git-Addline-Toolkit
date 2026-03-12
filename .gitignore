@@ -179,3 +179,7 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# Bundled PortableGit payload
+vendor/PortableGit/*
+!vendor/PortableGit/README.md
