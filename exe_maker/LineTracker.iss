@@ -4,7 +4,7 @@ AppVersion=0.1.0
 DefaultDirName={localappdata}\Programs\LineTracker
 DefaultGroupName=Line Tracker
 DisableProgramGroupPage=yes
-OutputDir=..\dist
+OutputDir=dist
 OutputBaseFilename=LineTrackerSetup
 Compression=lzma2
 SolidCompression=yes
@@ -13,8 +13,8 @@ AppId={{D1E6F5A2-3A8C-4A9F-8D6D-3B2B8F7E6A1D}
 PrivilegesRequired=lowest
 
 [Files]
-Source: "..\dist\LineTracker\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "..\dist\LineTrackerCli.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dist\LineTracker\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "dist\LineTrackerCli.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\app\setup\setup_check.bat"; DestDir: "{app}\setup"; Flags: ignoreversion
 
 [Icons]

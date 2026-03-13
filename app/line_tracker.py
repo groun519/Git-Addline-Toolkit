@@ -64,6 +64,20 @@ _GIT_EXECUTABLE: str | None = None
 _GIT_SOURCE: str | None = None
 
 
+def _git_subprocess_kwargs() -> dict[str, object]:
+    kwargs: dict[str, object] = {
+        "capture_output": True,
+        "text": True,
+        "encoding": "utf-8",
+        "errors": "replace",
+        "check": False,
+    }
+    create_no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if create_no_window:
+        kwargs["creationflags"] = create_no_window
+    return kwargs
+
+
 def get_app_state_dir() -> Path:
     local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
     if local_appdata:
@@ -161,11 +175,7 @@ def get_git_version() -> str | None:
     try:
         result = subprocess.run(
             [git_executable, "--version"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
+            **_git_subprocess_kwargs(),
         )
     except OSError:
         return None
@@ -213,11 +223,7 @@ def run_git(repo: Path, args: list[str]) -> str:
     result = subprocess.run(
         [git_executable, *args],
         cwd=repo,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
+        **_git_subprocess_kwargs(),
     )
     if result.returncode != 0:
         stderr = result.stderr.strip()
@@ -233,11 +239,7 @@ def find_repo_root(start: Path) -> Path:
     try:
         result = subprocess.run(
             [git_executable, "-C", str(start), "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
+            **_git_subprocess_kwargs(),
         )
     except OSError:
         return start
@@ -399,11 +401,7 @@ def git_ref_exists(repo: Path, ref: str) -> bool:
         result = subprocess.run(
             [git_executable, "show-ref", "--verify", "--quiet", ref],
             cwd=repo,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
+            **_git_subprocess_kwargs(),
         )
     except OSError:
         return False

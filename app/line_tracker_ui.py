@@ -970,13 +970,14 @@ class LineTrackerApp:
         self.save_settings()
 
     def build_config(self) -> TrackerConfig:
+        tracked_ref = resolve_ref(self.repo, self.ref)
         return TrackerConfig(
             repo=self.repo,
             goal=self.goal,
             base_total=self.base_total,
             base_commit=self.base_commit,
             author=self.author,
-            ref=self.ref,
+            ref=tracked_ref,
             include_local=True,
             today=self.today_override if self.custom_today_var.get() else None,
             month_end=self.month_end,
@@ -986,11 +987,12 @@ class LineTrackerApp:
     def format_ref_label(self) -> str:
         if not self.repo_selected:
             return self.t("repo_not_selected")
-        label = f"{self.repo.name} • {self.ref}"
+        tracked_ref = resolve_ref(self.repo, self.ref)
+        label = f"{self.repo.name} • {tracked_ref}"
         current = resolve_current_ref(self.repo)
         self.current_ref = current
-        if current != self.ref:
-            return f"{self.repo.name} • {self.ref} + {current}"
+        if current != tracked_ref:
+            return f"{self.repo.name} • {tracked_ref} + {current}"
         return label
 
     def t(self, key: str, **kwargs) -> str:
@@ -2089,7 +2091,7 @@ class LineTrackerApp:
         self.repo = repo
         self.repo_selected = True
         self.repo_entry_var.set(str(self.repo))
-        self.ref = "auto"
+        self.ref = resolve_ref(self.repo, "auto")
         self.rebuild_author_controls(reset_invalid_to_auto=True)
         clear_cache_for_repo(self.repo)
         self.update_repo_dependent_controls()

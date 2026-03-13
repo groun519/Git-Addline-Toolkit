@@ -8,7 +8,7 @@ Designed to live under a repo (e.g. `PROJECT-MA/tools/Git-Addline-Toolkit`), but
 
 다른 사용자에게 공유할 때는 소스 폴더가 아니라 설치 파일을 보내는 방식이 기준입니다.
 
-1. `build_installer.bat`로 `dist\LineTrackerSetup.exe`를 만듭니다.
+1. `exe_maker\build_installer.bat`로 `exe_maker\dist\LineTrackerSetup.exe`를 만듭니다.
 2. 그 설치 파일을 상대방에게 전달합니다.
 3. 상대방은 설치 후 시작 메뉴나 바탕화면 아이콘으로 실행합니다.
 4. UI에서 `리포 경로`를 설정하고 `리포 선택` -> `새로고침`을 누릅니다.
@@ -40,7 +40,7 @@ The selected repo path is saved and restored on next launch.
 - `line_tracker_ui_click.vbs`  
   Source 실행용 런처입니다. `pythonw`가 있으면 콘솔 없이 실행하고, 없으면 `python`을 사용합니다.
 
-- `dist\LineTrackerSetup.exe`  
+- `exe_maker\dist\LineTrackerSetup.exe`  
   공유용 설치 파일입니다. 설치 후에는 번들 EXE로 실행되며 Python이 필요 없습니다.
 
 Internal state files are stored in `%LocalAppData%\LineTracker`:
@@ -137,18 +137,18 @@ The UI uses the same engine under the hood.
 - 저장소에는 `vendor\PortableGit\README.md`만 추적되고, 실제 PortableGit 파일은 Git에서 제외됩니다.
 
 ## 빌드
-1. `build_installer.bat` 실행
+1. `exe_maker\build_installer.bat` 실행
 2. 스크립트가 `python -m unittest discover -s tests -v`를 먼저 실행
 3. 테스트 통과 후 GUI 앱과 `LineTrackerCli.exe`를 함께 빌드
 4. 설치 파일을 빌드
-5. 이어서 `smoke_test_installer.bat`로 무소음 설치 + 설치본 CLI 실행 검증
-6. 모든 단계 통과 후 `dist\LineTrackerSetup.exe` 사용
+5. 이어서 `exe_maker\smoke_test_installer.bat`로 무소음 설치 + 설치본 CLI 실행 검증
+6. 모든 단계 통과 후 `exe_maker\dist\LineTrackerSetup.exe` 사용
 
 스모크 검증을 건너뛰고 싶으면:
 
 ```bat
 set LINE_TRACKER_SKIP_SMOKE=1
-build_installer.bat
+exe_maker\build_installer.bat
 ```
 
 ## 결과

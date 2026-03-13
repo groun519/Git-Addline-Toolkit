@@ -15,6 +15,7 @@ from line_tracker import (
     get_uncommitted_deletions,
     resolve_base_commit,
     resolve_current_ref,
+    resolve_ref,
 )
 
 
@@ -38,12 +39,18 @@ def _compute_branch_total(repo: Path, author: str, tracked_ref: str, current_ref
     return get_committed_insertions(repo, tracked_ref, author, current_ref)
 
 
-def _compute_all_committed_total(repo: Path, result: TrackerResult, config: TrackerConfig, current_ref: str) -> int:
-    base_commit = resolve_base_commit(repo, result.today, config.base_commit, config.ref)
+def _compute_all_committed_total(
+    repo: Path,
+    result: TrackerResult,
+    config: TrackerConfig,
+    tracked_ref: str,
+    current_ref: str,
+) -> int:
+    base_commit = resolve_base_commit(repo, result.today, config.base_commit, tracked_ref)
     all_base_total = get_total_insertions_up_to(repo, base_commit, "")
-    all_committed = get_committed_insertions(repo, base_commit, "", config.ref)
-    if config.include_local and current_ref != config.ref:
-        all_committed += get_committed_insertions(repo, config.ref, "", current_ref)
+    all_committed = get_committed_insertions(repo, base_commit, "", tracked_ref)
+    if config.include_local and current_ref != tracked_ref:
+        all_committed += get_committed_insertions(repo, tracked_ref, "", current_ref)
     return all_base_total + all_committed
 
 
@@ -52,6 +59,7 @@ def _build_graph_points(
     author: str,
     result: TrackerResult,
     config: TrackerConfig,
+    tracked_ref: str,
     graph_days: int,
 ) -> tuple[list[tuple[dt.date, int]], float, int]:
     end_day = result.today
@@ -61,7 +69,7 @@ def _build_graph_points(
         start_day,
         end_day,
         author,
-        config.ref,
+        tracked_ref,
         config.include_local,
     )
     today_real = dt.date.today()
@@ -81,18 +89,26 @@ def _build_graph_points(
 
 def build_refresh_snapshot(repo: Path, author: str, config: TrackerConfig, graph_days: int) -> RefreshSnapshot:
     result = compute_metrics(config)
+    tracked_ref = resolve_ref(repo, config.ref)
     current_ref = resolve_current_ref(repo)
-    branch_total = _compute_branch_total(repo, author, config.ref, current_ref)
-    all_committed_total = _compute_all_committed_total(repo, result, config, current_ref)
+    branch_total = _compute_branch_total(repo, author, tracked_ref, current_ref)
+    all_committed_total = _compute_all_committed_total(repo, result, config, tracked_ref, current_ref)
     committed_today = get_committed_insertions_for_date_combined(
         repo,
         result.today,
         author,
-        config.ref,
+        tracked_ref,
         config.include_local,
     )
     today_done = committed_today + result.uncommitted_insertions
-    points, graph_avg, graph_max = _build_graph_points(repo, author, result, config, graph_days)
+    points, graph_avg, graph_max = _build_graph_points(
+        repo,
+        author,
+        result,
+        config,
+        tracked_ref,
+        graph_days,
+    )
     share_percent = (result.committed_total / all_committed_total) * 100.0 if all_committed_total > 0 else 0.0
 
     return RefreshSnapshot(

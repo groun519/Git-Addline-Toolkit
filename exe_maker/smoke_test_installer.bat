@@ -1,7 +1,8 @@
 @echo off
 setlocal
-set "ROOT=%~dp0"
-if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
+set "SCRIPT_DIR=%~dp0"
+if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
+for %%I in ("%SCRIPT_DIR%\..") do set "ROOT=%%~fI"
 set "INSTALLER=%~1"
 set "REPO_PATH=%~2"
 set "INSTALL_ROOT=%~3"
@@ -11,9 +12,9 @@ set "CLI_EXE="
 set "SETUP_CHECK="
 set "APP_PID="
 
-if not defined INSTALLER set "INSTALLER=%ROOT%\dist\LineTrackerSetup.exe"
+if not defined INSTALLER set "INSTALLER=%SCRIPT_DIR%\dist\LineTrackerSetup.exe"
 if not defined REPO_PATH set "REPO_PATH=%ROOT%"
-if not defined INSTALL_ROOT set "INSTALL_ROOT=%ROOT%\build\_smoke_install"
+if not defined INSTALL_ROOT set "INSTALL_ROOT=%SCRIPT_DIR%\build\_smoke_install"
 
 call :make_install_dir
 if errorlevel 1 exit /b 1

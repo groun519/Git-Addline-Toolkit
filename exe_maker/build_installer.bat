@@ -1,9 +1,12 @@
 @echo off
 setlocal
-set "ROOT=%~dp0"
-if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
+set "SCRIPT_DIR=%~dp0"
+if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
+for %%I in ("%SCRIPT_DIR%\..") do set "ROOT=%%~fI"
+set "BUILD_ROOT=%SCRIPT_DIR%\build"
+set "DIST_ROOT=%SCRIPT_DIR%\dist"
 set "PORTABLE_GIT_SRC=%ROOT%\vendor\PortableGit"
-set "PORTABLE_GIT_DST=%ROOT%\dist\LineTracker\PortableGit"
+set "PORTABLE_GIT_DST=%DIST_ROOT%\LineTracker\PortableGit"
 set "PY_CMD="
 set "PY_ARGS="
 set "ISCC_CMD="
@@ -40,16 +43,16 @@ if errorlevel 1 (
 
 echo.
 echo Installing build deps...
-%PY_CMD% %PY_ARGS% -m pip install -r "%ROOT%\requirements-build.txt"
+%PY_CMD% %PY_ARGS% -m pip install -r "%SCRIPT_DIR%\requirements-build.txt"
 if errorlevel 1 exit /b 1
 
 echo.
 echo Building app with PyInstaller...
 %PY_CMD% %PY_ARGS% -m PyInstaller --noconfirm --clean --noconsole ^
   --name "LineTracker" ^
-  --distpath "%ROOT%\dist" ^
-  --workpath "%ROOT%\build" ^
-  --specpath "%ROOT%\build" ^
+  --distpath "%DIST_ROOT%" ^
+  --workpath "%BUILD_ROOT%" ^
+  --specpath "%BUILD_ROOT%" ^
   "%ROOT%\app\line_tracker_ui.pyw"
 if errorlevel 1 exit /b 1
 
@@ -57,9 +60,9 @@ echo.
 echo Building CLI with PyInstaller...
 %PY_CMD% %PY_ARGS% -m PyInstaller --noconfirm --clean --onefile ^
   --name "LineTrackerCli" ^
-  --distpath "%ROOT%\dist" ^
-  --workpath "%ROOT%\build\cli" ^
-  --specpath "%ROOT%\build" ^
+  --distpath "%DIST_ROOT%" ^
+  --workpath "%BUILD_ROOT%\cli" ^
+  --specpath "%BUILD_ROOT%" ^
   "%ROOT%\app\line_tracker.py"
 if errorlevel 1 exit /b 1
 
@@ -97,13 +100,13 @@ if not defined ISCC_CMD (
 
 echo.
 echo Building installer...
-"%ISCC_CMD%" "%ROOT%\installer\LineTracker.iss"
+"%ISCC_CMD%" "%SCRIPT_DIR%\LineTracker.iss"
 if errorlevel 1 exit /b 1
 
 if /i not "%LINE_TRACKER_SKIP_SMOKE%"=="1" (
   echo.
   echo Running installer smoke test...
-  call "%ROOT%\smoke_test_installer.bat" "%ROOT%\dist\LineTrackerSetup.exe" "%ROOT%" "%ROOT%\build\_smoke_install"
+  call "%SCRIPT_DIR%\smoke_test_installer.bat" "%DIST_ROOT%\LineTrackerSetup.exe" "%ROOT%" "%BUILD_ROOT%\_smoke_install"
   if errorlevel 1 exit /b 1
 )
 

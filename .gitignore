@@ -9,8 +9,10 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
+exe_maker/build/
 develop-eggs/
 dist/
+exe_maker/dist/
 downloads/
 eggs/
 .eggs/
@@ -183,3 +185,7 @@ cython_debug/
 # Bundled PortableGit payload
 vendor/PortableGit/*
 !vendor/PortableGit/README.md
+
+# Legacy local app state
+app/line_tracker_cache.json
+app/line_tracker_ui_settings.json
