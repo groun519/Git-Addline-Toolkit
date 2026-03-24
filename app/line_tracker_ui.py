@@ -60,6 +60,52 @@ GRAPH_CANVAS_HEIGHT = 140
 BAR_LENGTH = 420
 GRAPH_CARD_WIDTH = GRAPH_CANVAS_WIDTH + 24
 NOTE_CARD_WIDTH = 420
+NOTE_CARD_FIT_PADDING = 8
+CARD_SCROLLBAR_STYLE = "Card.Vertical.TScrollbar"
+FOOTER_LOADING_STYLE = "Loading.Horizontal.TProgressbar"
+GRASS_SPLIT_ROWS = 2
+GRASS_CELL_SIZE = 15
+GRASS_CELL_GAP = 5
+GRASS_BAND_DAY_ROWS = 7
+GRASS_BAND_GAP = 36
+GRASS_OUTER_PAD_X = 18
+GRASS_OUTER_PAD_Y = 16
+GRASS_LABEL_WIDTH = 30
+GRASS_MONTH_LABEL_HEIGHT = 18
+GRASS_WEEKS_PER_ROW = 27
+GRASS_PANEL_PAD_X = 8
+GRASS_LEGEND_SWATCH = 12
+GRASS_LEGEND_GAP_X = 10
+GRASS_FIXED_LEVEL_BANDS = (
+    (1, 99),
+    (100, 299),
+    (300, 699),
+    (700, None),
+)
+GRASS_UNCOMMITTED_LEVEL_COLORS = (
+    "#a9c3ff",
+    "#7ea6ff",
+    "#4d86f0",
+    "#2f63cf",
+)
+GRASS_CANVAS_WIDTH = (
+    (GRASS_OUTER_PAD_X * 2)
+    + GRASS_LABEL_WIDTH
+    + (GRASS_WEEKS_PER_ROW * GRASS_CELL_SIZE)
+    + ((GRASS_WEEKS_PER_ROW - 1) * GRASS_CELL_GAP)
+)
+GRASS_CANVAS_HEIGHT = (
+    (GRASS_OUTER_PAD_Y * 2)
+    + (GRASS_MONTH_LABEL_HEIGHT * GRASS_SPLIT_ROWS)
+    + (
+        (
+            (GRASS_BAND_DAY_ROWS * GRASS_CELL_SIZE)
+            + ((GRASS_BAND_DAY_ROWS - 1) * GRASS_CELL_GAP)
+        )
+        * GRASS_SPLIT_ROWS
+    )
+    + GRASS_BAND_GAP
+)
 BASE_WINDOW_WIDTH = 1440
 BASE_WINDOW_HEIGHT = 675
 MIN_WINDOW_WIDTH = 1100
@@ -81,11 +127,16 @@ TEXT = {
         "theme_forest": "포레스트",
         "theme_cream": "크림",
         "theme_slate": "슬레이트",
+        "theme_dark": "다크",
+        "theme_vs": "VS",
+        "theme_neon": "네온",
         "repo_label": "리포 경로",
         "repo_select": "리포 선택",
         "graph_title": "일별 추가줄 그래프",
         "graph_period": "기간",
         "commit_memo": "커밋 메모",
+        "tab_memo": "커밋 메모",
+        "tab_grass": "Git 잔디",
         "memo_editor": "메모 원문",
         "memo_preview": "자동 분리 미리보기",
         "memo_hint": "첫 줄은 제목, 나머지는 DONE/TODO 항목으로 자동 분리됩니다.",
@@ -98,6 +149,16 @@ TEXT = {
         "move_to_todo": "TODO로 이동",
         "copy_summary": "제목 복사",
         "copy_description": "설명 복사",
+        "grass_hint": "칸 하나가 하루입니다. 진할수록 그날 추가한 줄 수가 많고, 테두리는 오늘입니다.",
+        "grass_summary": "활동 {active}일 | 총 {total}줄 | 평균 {avg}줄/활동일",
+        "grass_empty": "표시할 기록이 없습니다.",
+        "grass_day_mon": "월",
+        "grass_day_wed": "수",
+        "grass_day_fri": "금",
+        "grass_legend_zero": "0줄",
+        "grass_legend_range": "{start}~{end}줄",
+        "grass_legend_open": "{start}줄+",
+        "grass_uncommitted_legend": "미커밋(같은 구간)",
         "settings": "설정",
         "custom_date": "날짜 커스텀(YYYY-MM-DD)",
         "apply_date": "날짜 적용",
@@ -155,11 +216,16 @@ TEXT = {
         "theme_forest": "Forest",
         "theme_cream": "Cream",
         "theme_slate": "Slate",
+        "theme_dark": "Dark",
+        "theme_vs": "VS",
+        "theme_neon": "Neon",
         "repo_label": "Repository",
         "repo_select": "Browse",
         "graph_title": "Daily Additions Graph",
         "graph_period": "Range",
         "commit_memo": "Commit Memo",
+        "tab_memo": "Commit Memo",
+        "tab_grass": "Git Grass",
         "memo_editor": "Memo Text",
         "memo_preview": "Parsed Preview",
         "memo_hint": "The first line becomes the title. Remaining lines are split into DONE/TODO items.",
@@ -172,6 +238,16 @@ TEXT = {
         "move_to_todo": "Move to TODO",
         "copy_summary": "Copy Summary",
         "copy_description": "Copy Description",
+        "grass_hint": "Each cell is a day. Darker cells mean more added lines, and the outline marks today.",
+        "grass_summary": "{active} active days | {total} total lines | {avg} avg lines/active day",
+        "grass_empty": "No history to display.",
+        "grass_day_mon": "Mon",
+        "grass_day_wed": "Wed",
+        "grass_day_fri": "Fri",
+        "grass_legend_zero": "0 lines",
+        "grass_legend_range": "{start}-{end} lines",
+        "grass_legend_open": "{start}+ lines",
+        "grass_uncommitted_legend": "Uncommitted (same bands)",
         "settings": "Settings",
         "custom_date": "Custom Date (YYYY-MM-DD)",
         "apply_date": "Apply Date",
@@ -360,6 +436,7 @@ class LineTrackerApp:
         self.last_window_geometry = saved_geometry or default_geometry
         self.root.geometry(self.last_window_geometry)
         self.root.minsize(initial_min_width, min_height)
+        self.root.maxsize(default_width, self.root.winfo_screenheight())
         self.base_window_width = BASE_WINDOW_WIDTH
         self.min_height = min_height
 
@@ -391,7 +468,7 @@ class LineTrackerApp:
         self.author = resolve_author(self.repo, self.author_raw)
 
         self.root.title("PROJECT-MA Line Tracker")
-        self.root.resizable(True, False)
+        self.root.resizable(False, False)
         self.root.configure(bg=self.theme.app_bg)
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
@@ -444,6 +521,10 @@ class LineTrackerApp:
         self.branch_total_committed = 0
         self.graph_points: list[tuple[dt.date, int]] = []
         self.graph_highlight_day: dt.date | None = None
+        self.grass_points: list[tuple[dt.date, int]] = []
+        self.grass_highlight_day: dt.date | None = None
+        self.grass_uncommitted_today = 0
+        self.active_note_tab = "memo"
         self.memo_text_value = saved_memo_text
         self.memo_autosave_job: str | None = None
         self.memo_widget_updating = False
@@ -743,18 +824,56 @@ class LineTrackerApp:
         note_section = ttk.Frame(right_area, style="App.TFrame")
         note_section.grid(row=0, column=1, rowspan=2, sticky="nw", padx=(10, 0))
         note_section.columnconfigure(0, weight=1, minsize=NOTE_CARD_WIDTH)
+        self.note_section = note_section
+        self.note_section_column = 0
+        self.right_area = right_area
+        self.right_area_note_column = 1
 
-        self.note_title_label = ttk.Label(note_section, text=self.t("commit_memo"), style="Section.TLabel")
-        self.note_title_label.grid(row=0, column=0, sticky="w", pady=(0, 6))
+        note_tabs = ttk.Frame(note_section, style="App.TFrame")
+        note_tabs.grid(row=0, column=0, sticky="w", pady=(0, 6))
+
+        self.memo_tab_button = ttk.Button(
+            note_tabs,
+            text=self.t("tab_memo"),
+            command=lambda: self.set_note_tab("memo"),
+            style="TabActive.TButton",
+        )
+        self.memo_tab_button.grid(row=0, column=0, sticky="w")
+
+        self.grass_tab_button = ttk.Button(
+            note_tabs,
+            text=self.t("tab_grass"),
+            command=lambda: self.set_note_tab("grass"),
+            style="Tab.TButton",
+        )
+        self.grass_tab_button.grid(row=0, column=1, sticky="w", padx=(8, 0))
 
         note_card = ttk.Frame(note_section, style="Card.TFrame", padding=(12, 10))
         note_card.grid(row=1, column=0, sticky="ew")
+        note_card.rowconfigure(0, weight=1)
         note_card.columnconfigure(0, weight=1)
+        self.note_card = note_card
 
-        self.note_editor_label = ttk.Label(note_card, text=self.t("memo_editor"), style="CardLabel.TLabel")
-        self.note_editor_label.grid(row=0, column=0, sticky="w")
+        self.memo_panel = ttk.Frame(note_card, style="CardInner.TFrame")
+        self.memo_panel.grid(row=0, column=0, sticky="nsew")
+        self.memo_panel.columnconfigure(0, weight=1)
 
-        editor_frame = ttk.Frame(note_card, style="CardInner.TFrame")
+        self.grass_panel = ttk.Frame(note_card, style="CardInner.TFrame")
+        self.grass_panel.grid(row=0, column=0, sticky="nsew")
+        self.grass_panel.columnconfigure(0, weight=1)
+
+        self._build_memo_tab_contents(self.memo_panel)
+        self._build_grass_tab_contents(self.grass_panel)
+        self.set_memo_text(self.memo_text_value)
+        self.refresh_grass_panel()
+        self.freeze_note_panel_size()
+        self.set_note_tab(self.active_note_tab)
+
+    def _build_memo_tab_contents(self, parent: ttk.Frame) -> None:
+        self.note_editor_label = ttk.Label(parent, text=self.t("memo_editor"), style="CardLabel.TLabel")
+        self.note_editor_label.grid(row=0, column=0, sticky="w", pady=(2, 0))
+
+        editor_frame = ttk.Frame(parent, style="CardInner.TFrame")
         editor_frame.grid(row=1, column=0, sticky="ew", pady=(4, 4))
         editor_frame.columnconfigure(0, weight=1)
 
@@ -780,18 +899,19 @@ class LineTrackerApp:
             editor_frame,
             orient="vertical",
             command=self.memo_text_widget.yview,
+            style=CARD_SCROLLBAR_STYLE,
         )
         self.memo_text_scroll.grid(row=0, column=1, sticky="ns", padx=(6, 0))
         self.memo_text_widget.configure(yscrollcommand=self.memo_text_scroll.set)
         self._bind_vertical_mousewheel(self.memo_text_widget, self.memo_text_widget)
 
-        self.note_hint_label = ttk.Label(note_card, text=self.t("memo_hint"), style="CardLabel.TLabel")
-        self.note_hint_label.grid(row=2, column=0, sticky="w", pady=(0, 8))
+        self.note_hint_label = ttk.Label(parent, text=self.t("memo_hint"), style="CardLabel.TLabel")
+        self.note_hint_label.grid(row=2, column=0, sticky="w", pady=(2, 8))
 
-        self.note_preview_label = ttk.Label(note_card, text=self.t("memo_preview"), style="CardLabel.TLabel")
-        self.note_preview_label.grid(row=3, column=0, sticky="w")
+        self.note_preview_label = ttk.Label(parent, text=self.t("memo_preview"), style="CardLabel.TLabel")
+        self.note_preview_label.grid(row=3, column=0, sticky="w", pady=(2, 0))
 
-        preview_frame = ttk.Frame(note_card, style="CardInner.TFrame")
+        preview_frame = ttk.Frame(parent, style="CardInner.TFrame")
         preview_frame.grid(row=4, column=0, sticky="ew", pady=(4, 8))
         preview_frame.columnconfigure(0, weight=1)
 
@@ -808,6 +928,7 @@ class LineTrackerApp:
             preview_frame,
             orient="vertical",
             command=self.memo_preview_canvas.yview,
+            style=CARD_SCROLLBAR_STYLE,
         )
         self.memo_preview_scroll.grid(row=0, column=1, sticky="ns", padx=(6, 0))
         self.memo_preview_canvas.configure(yscrollcommand=self.memo_preview_scroll.set)
@@ -823,7 +944,7 @@ class LineTrackerApp:
         self._bind_vertical_mousewheel(self.memo_preview_canvas, self.memo_preview_canvas)
         self._bind_vertical_mousewheel(self.memo_preview_inner, self.memo_preview_canvas)
 
-        note_actions = ttk.Frame(note_card, style="Card.TFrame")
+        note_actions = ttk.Frame(parent, style="CardInner.TFrame")
         note_actions.grid(row=5, column=0, sticky="e")
         self.copy_summary_button = ttk.Button(
             note_actions,
@@ -837,7 +958,25 @@ class LineTrackerApp:
             command=self.copy_commit_description,
         )
         self.copy_description_button.grid(row=0, column=1, sticky="e", padx=(8, 0))
-        self.set_memo_text(self.memo_text_value)
+
+    def _build_grass_tab_contents(self, parent: ttk.Frame) -> None:
+        parent.rowconfigure(3, weight=1)
+        self.grass_legend_frame = ttk.Frame(parent, style="CardInner.TFrame")
+        self.grass_legend_frame.grid(row=0, column=0, sticky="w", padx=GRASS_PANEL_PAD_X, pady=(4, 0))
+
+        self.grass_canvas = tk.Canvas(
+            parent,
+            width=GRASS_CANVAS_WIDTH,
+            height=GRASS_CANVAS_HEIGHT,
+            bg=self.theme.card_bg,
+            highlightthickness=1,
+            highlightbackground=self.theme.border,
+        )
+        self.grass_canvas.grid(row=1, column=0, sticky="w", padx=GRASS_PANEL_PAD_X, pady=(10, 0))
+
+        self.grass_summary_var = tk.StringVar(value="")
+        self.grass_summary_label = ttk.Label(parent, textvariable=self.grass_summary_var, style="CardLabel.TLabel")
+        self.grass_summary_label.grid(row=2, column=0, sticky="w", padx=GRASS_PANEL_PAD_X, pady=(12, 10))
 
     def _build_controls_section(
         self,
@@ -935,7 +1074,8 @@ class LineTrackerApp:
             footer_left,
             orient="horizontal",
             mode="indeterminate",
-            length=180,
+            length=196,
+            style=FOOTER_LOADING_STYLE,
         )
         self.loading_label.grid(row=1, column=0, sticky="w", pady=(6, 0))
         self.loading_bar.grid(row=1, column=1, sticky="w", padx=(6, 0), pady=(6, 0))
@@ -1021,6 +1161,46 @@ class LineTrackerApp:
                 return theme_name
         return resolve_theme_name(normalized)
 
+    def refresh_note_tab_buttons(self) -> None:
+        if not hasattr(self, "memo_tab_button"):
+            return
+        self.memo_tab_button.configure(style="TabActive.TButton" if self.active_note_tab == "memo" else "Tab.TButton")
+        self.grass_tab_button.configure(style="TabActive.TButton" if self.active_note_tab == "grass" else "Tab.TButton")
+
+    def set_note_tab(self, tab_name: str) -> None:
+        active_tab = "grass" if tab_name == "grass" else "memo"
+        self.active_note_tab = active_tab
+        if hasattr(self, "memo_panel"):
+            if active_tab == "memo":
+                self.grass_panel.grid_remove()
+                self.memo_panel.grid()
+            else:
+                self.memo_panel.grid_remove()
+                self.grass_panel.grid()
+        self.refresh_note_tab_buttons()
+
+    def freeze_note_panel_size(self) -> None:
+        if not hasattr(self, "note_card"):
+            return
+        self.root.update_idletasks()
+        panel_width = max(
+            NOTE_CARD_WIDTH - 24,
+            self.memo_panel.winfo_reqwidth(),
+            self.grass_panel.winfo_reqwidth(),
+        )
+        panel_height = max(
+            self.memo_panel.winfo_reqheight(),
+            self.grass_panel.winfo_reqheight(),
+        )
+        card_width = panel_width + 24 + NOTE_CARD_FIT_PADDING
+        card_height = panel_height + 20
+        self.note_card.configure(width=card_width, height=card_height)
+        self.note_card.grid_propagate(False)
+        if hasattr(self, "note_section"):
+            self.note_section.columnconfigure(self.note_section_column, minsize=card_width)
+        if hasattr(self, "right_area"):
+            self.right_area.columnconfigure(self.right_area_note_column, minsize=card_width)
+
     def format_month_label(self, month: int) -> str:
         if self.lang == "en":
             return calendar.month_abbr[month]
@@ -1073,13 +1253,16 @@ class LineTrackerApp:
 
         self.graph_title.configure(text=self.t("graph_title"))
         self.graph_days_label.configure(text=self.t("graph_period"))
-        self.note_title_label.configure(text=self.t("commit_memo"))
+        self.memo_tab_button.configure(text=self.t("tab_memo"))
+        self.grass_tab_button.configure(text=self.t("tab_grass"))
         self.note_editor_label.configure(text=self.t("memo_editor"))
         self.note_hint_label.configure(text=self.t("memo_hint"))
         self.note_preview_label.configure(text=self.t("memo_preview"))
         self.copy_summary_button.configure(text=self.t("copy_summary"))
         self.copy_description_button.configure(text=self.t("copy_description"))
         self.refresh_memo_preview()
+        self.refresh_grass_panel()
+        self.freeze_note_panel_size()
 
         self.controls_title.configure(text=self.t("settings"))
         self.custom_today_check.configure(text=self.t("custom_date"))
@@ -1099,6 +1282,7 @@ class LineTrackerApp:
         self.apply_layout_for_language()
 
         self.rebuild_author_controls(reset_invalid_to_auto=False)
+        self.refresh_note_tab_buttons()
 
         if self.refresh_in_progress:
             self.loading_var.set(self.t("loading"))
@@ -1134,6 +1318,7 @@ class LineTrackerApp:
         fitted_width = self.get_fitted_window_width()
         min_height = getattr(self, "min_height", MIN_WINDOW_HEIGHT)
         self.root.minsize(fitted_width, min_height)
+        self.root.maxsize(fitted_width, self.root.winfo_screenheight())
         current_geometry = self.normalize_geometry(
             self.root.winfo_geometry(),
             min_width=fitted_width,
@@ -1209,6 +1394,71 @@ class LineTrackerApp:
             foreground=[("disabled", palette.button_disabled_text)],
         )
         self.style.configure(
+            "Tab.TButton",
+            font=FONT_BODY,
+            foreground=palette.text,
+            background=palette.card_bg,
+            padding=(10, 6),
+        )
+        self.style.map(
+            "Tab.TButton",
+            background=[("active", palette.graph_grid), ("disabled", palette.card_bg)],
+            foreground=[("disabled", palette.button_disabled_text)],
+        )
+        self.style.configure(
+            "TabActive.TButton",
+            font=FONT_BODY,
+            foreground=palette.button_text,
+            background=palette.accent,
+            padding=(10, 6),
+        )
+        self.style.map(
+            "TabActive.TButton",
+            background=[("active", palette.accent_dark), ("disabled", palette.accent_light)],
+            foreground=[("disabled", palette.button_disabled_text)],
+        )
+        self.style.layout(
+            CARD_SCROLLBAR_STYLE,
+            [
+                (
+                    "Vertical.Scrollbar.trough",
+                    {
+                        "sticky": "ns",
+                        "children": [
+                            (
+                                "Vertical.Scrollbar.thumb",
+                                {
+                                    "expand": "1",
+                                    "sticky": "nswe",
+                                },
+                            )
+                        ],
+                    },
+                )
+            ],
+        )
+        self.style.configure(
+            CARD_SCROLLBAR_STYLE,
+            gripcount=0,
+            background=palette.accent_dark,
+            darkcolor=palette.accent_dark,
+            lightcolor=palette.accent_light,
+            troughcolor=palette.canvas_bg,
+            bordercolor=palette.border,
+            arrowcolor=palette.accent_dark,
+            relief="flat",
+            troughrelief="flat",
+            borderwidth=0,
+            arrowsize=12,
+        )
+        self.style.map(
+            CARD_SCROLLBAR_STYLE,
+            background=[("active", palette.accent), ("pressed", palette.accent_alt)],
+            darkcolor=[("active", palette.accent), ("pressed", palette.accent_alt_dark)],
+            lightcolor=[("active", palette.accent_light), ("pressed", palette.accent_alt)],
+            bordercolor=[("active", palette.accent_dark)],
+        )
+        self.style.configure(
             "Overall.Horizontal.TProgressbar",
             troughcolor=palette.overall_progress_trough,
             background=palette.accent,
@@ -1221,6 +1471,15 @@ class LineTrackerApp:
             background=palette.accent_alt,
             lightcolor=palette.accent_alt,
             darkcolor=palette.accent_alt,
+        )
+        self.style.configure(
+            FOOTER_LOADING_STYLE,
+            troughcolor=palette.graph_grid,
+            background=palette.accent,
+            lightcolor=palette.accent_light,
+            darkcolor=palette.accent_dark,
+            bordercolor=palette.border,
+            thickness=9,
         )
 
     def _configure_widget_palette(self) -> None:
@@ -1245,6 +1504,11 @@ class LineTrackerApp:
             )
         if hasattr(self, "memo_preview_canvas"):
             self.memo_preview_canvas.configure(bg=palette.card_bg, highlightbackground=palette.border)
+        if hasattr(self, "grass_canvas"):
+            self.grass_canvas.configure(bg=palette.card_bg, highlightbackground=palette.border)
+            self.refresh_grass_panel()
+        if hasattr(self, "memo_tab_button"):
+            self.refresh_note_tab_buttons()
         graph_highlight_day = getattr(self, "graph_highlight_day", None)
         if graph_highlight_day is not None and hasattr(self, "graph_canvas"):
             self.draw_daily_graph(getattr(self, "graph_points", []), graph_highlight_day)
@@ -1601,6 +1865,8 @@ class LineTrackerApp:
         self.delta_removed_var.set(f"-{snapshot.uncommitted_deletions:,}")
         self.update_progress(result, snapshot.today_done, snapshot.today_target)
         self.update_graph(snapshot.points, result.today, snapshot.graph_days, snapshot.graph_avg, snapshot.graph_max)
+        uncommitted_today = result.uncommitted_insertions if result.today == dt.date.today() else 0
+        self.update_grass(snapshot.grass_points, result.today, uncommitted_today)
 
         status_suffix = self.t("status_auto_suffix") if self.auto_refresh_var.get() else ""
         self.status_var.set(self.t("status_updated", time=dt.datetime.now().strftime("%H:%M:%S")) + status_suffix)
@@ -1685,6 +1951,238 @@ class LineTrackerApp:
                 max=f"{max_value:,}",
             )
         )
+
+    def update_grass(
+        self,
+        points: list[tuple[dt.date, int]],
+        highlight_day: dt.date,
+        uncommitted_today: int = 0,
+    ) -> None:
+        self.grass_points = list(points)
+        self.grass_highlight_day = highlight_day
+        self.grass_uncommitted_today = max(0, int(uncommitted_today))
+        self.refresh_grass_panel()
+
+    def refresh_grass_panel(self) -> None:
+        if not hasattr(self, "grass_canvas"):
+            return
+
+        highlight_day = self.grass_highlight_day or dt.date.today()
+        uncommitted_today = self.grass_uncommitted_today if highlight_day == dt.date.today() else 0
+        values = [value for _, value in self.grass_points]
+        self.refresh_grass_legend(uncommitted_today)
+        self.draw_grass_heatmap(self.grass_points, highlight_day, uncommitted_today)
+
+        if not values:
+            self.grass_summary_var.set(self.t("grass_empty"))
+            return
+
+        active_days = sum(1 for value in values if value > 0)
+        total_lines = sum(values)
+        avg_lines = (total_lines / active_days) if active_days else 0.0
+        self.grass_summary_var.set(
+            self.t(
+                "grass_summary",
+                active=f"{active_days:,}",
+                total=f"{total_lines:,}",
+                avg=f"{avg_lines:.1f}",
+            )
+        )
+
+    def grass_fixed_level_specs(self) -> list[tuple[str, int, int | None]]:
+        palette = self.theme
+        colors = [
+            palette.accent_light,
+            palette.accent,
+            palette.accent_dark,
+            palette.accent_alt,
+        ]
+        return [
+            (colors[index], start, end)
+            for index, (start, end) in enumerate(GRASS_FIXED_LEVEL_BANDS)
+        ]
+
+    def grass_uncommitted_level_specs(self) -> list[tuple[str, int, int | None]]:
+        return [
+            (GRASS_UNCOMMITTED_LEVEL_COLORS[index], start, end)
+            for index, (start, end) in enumerate(GRASS_FIXED_LEVEL_BANDS)
+        ]
+
+    def format_grass_legend_range(self, start: int, end: int | None) -> str:
+        start_text = f"{start:,}"
+        if end is None:
+            return self.t("grass_legend_open", start=start_text)
+        end_text = f"{end:,}"
+        return self.t("grass_legend_range", start=start_text, end=end_text)
+
+    def grass_legend_items(self, uncommitted_today: int) -> list[tuple[str, str]]:
+        palette = self.theme
+        items: list[tuple[str, str]] = [(palette.graph_grid, self.t("grass_legend_zero"))]
+        for color, start, end in self.grass_fixed_level_specs():
+            label = self.format_grass_legend_range(start, end)
+            items.append((color, label))
+        if uncommitted_today > 0:
+            items.append((GRASS_UNCOMMITTED_LEVEL_COLORS[2], self.t("grass_uncommitted_legend")))
+        return items
+
+    def refresh_grass_legend(self, uncommitted_today: int) -> None:
+        if not hasattr(self, "grass_legend_frame"):
+            return
+
+        for child in self.grass_legend_frame.winfo_children():
+            child.destroy()
+
+        for column, (color, label_text) in enumerate(self.grass_legend_items(uncommitted_today)):
+            item_frame = ttk.Frame(self.grass_legend_frame, style="CardInner.TFrame")
+            item_frame.grid(row=0, column=column, sticky="w", padx=(0, GRASS_LEGEND_GAP_X))
+
+            swatch = tk.Frame(
+                item_frame,
+                width=GRASS_LEGEND_SWATCH,
+                height=GRASS_LEGEND_SWATCH,
+                bg=color,
+                highlightthickness=1,
+                highlightbackground=self.theme.border,
+            )
+            swatch.grid(row=0, column=0, sticky="w")
+            swatch.grid_propagate(False)
+
+            label = ttk.Label(item_frame, text=label_text, style="CardLabel.TLabel")
+            label.grid(row=0, column=1, sticky="w", padx=(5, 0))
+
+    @staticmethod
+    def _grass_color_for_specs(value: int, specs: list[tuple[str, int, int | None]], default_color: str) -> str:
+        if value <= 0:
+            return default_color
+        for color, start, end in specs:
+            if end is None:
+                if value >= start:
+                    return color
+                continue
+            if start <= value <= end:
+                return color
+        return specs[-1][0] if specs else default_color
+
+    def grass_level_color(self, value: int, *, uncommitted: bool = False) -> str:
+        palette = self.theme
+        specs = self.grass_uncommitted_level_specs() if uncommitted else self.grass_fixed_level_specs()
+        return self._grass_color_for_specs(value, specs, palette.graph_grid)
+
+    def draw_grass_heatmap(
+        self,
+        points: list[tuple[dt.date, int]],
+        highlight_day: dt.date,
+        uncommitted_today: int = 0,
+    ) -> None:
+        canvas = self.grass_canvas
+        palette = self.theme
+        canvas.delete("all")
+
+        width = GRASS_CANVAS_WIDTH
+        height = GRASS_CANVAS_HEIGHT
+        pitch = GRASS_CELL_SIZE + GRASS_CELL_GAP
+        band_height = (GRASS_BAND_DAY_ROWS * GRASS_CELL_SIZE) + ((GRASS_BAND_DAY_ROWS - 1) * GRASS_CELL_GAP)
+
+        if not points:
+            canvas.create_text(
+                width / 2,
+                height / 2,
+                text=self.t("grass_empty"),
+                fill=palette.muted_text,
+                font=FONT_BODY,
+            )
+            return
+
+        start_day = points[0][0]
+        end_day = points[-1][0]
+        grid_start = start_day - dt.timedelta(days=start_day.weekday())
+        grid_end = end_day + dt.timedelta(days=(6 - end_day.weekday()))
+        total_days = (grid_end - grid_start).days + 1
+        column_count = max(1, math.ceil(total_days / 7))
+        weeks_per_row = max(1, math.ceil(column_count / GRASS_SPLIT_ROWS))
+        values_by_day = {day: value for day, value in points}
+        actual_today = dt.date.today()
+        effective_uncommitted = uncommitted_today if highlight_day == actual_today else 0
+        committed_values_by_day = dict(values_by_day)
+        if effective_uncommitted > 0 and highlight_day in committed_values_by_day:
+            committed_values_by_day[highlight_day] = max(
+                0,
+                committed_values_by_day[highlight_day] - effective_uncommitted,
+            )
+
+        def band_month_y(band_index: int) -> int:
+            return GRASS_OUTER_PAD_Y + band_index * (GRASS_MONTH_LABEL_HEIGHT + band_height + GRASS_BAND_GAP)
+
+        def band_grid_y(band_index: int) -> int:
+            return band_month_y(band_index) + GRASS_MONTH_LABEL_HEIGHT
+
+        for band_index in range(GRASS_SPLIT_ROWS):
+            month_y = band_month_y(band_index)
+            grid_y = band_grid_y(band_index)
+
+            for label_text, row in (
+                (self.t("grass_day_mon"), 0),
+                (self.t("grass_day_wed"), 2),
+                (self.t("grass_day_fri"), 4),
+            ):
+                label_y = grid_y + row * pitch + GRASS_CELL_SIZE / 2
+                canvas.create_text(
+                    GRASS_OUTER_PAD_X,
+                    label_y,
+                    text=label_text,
+                    anchor="w",
+                    fill=palette.muted_text,
+                    font=("Bahnschrift", 9),
+                )
+
+            previous_month: int | None = None
+            for col_in_band in range(weeks_per_row):
+                global_col = band_index * weeks_per_row + col_in_band
+                if global_col >= column_count:
+                    break
+                visible_days = []
+                for row in range(7):
+                    cell_day = grid_start + dt.timedelta(days=global_col * 7 + row)
+                    if start_day <= cell_day <= end_day:
+                        visible_days.append(cell_day)
+                if not visible_days:
+                    continue
+                month = visible_days[0].month
+                if col_in_band == 0 or month != previous_month:
+                    canvas.create_text(
+                        GRASS_OUTER_PAD_X + GRASS_LABEL_WIDTH + col_in_band * pitch,
+                        month_y,
+                        text=self.format_month_label(month),
+                        anchor="w",
+                        fill=palette.muted_text,
+                        font=("Bahnschrift", 9),
+                    )
+                    previous_month = month
+
+        for day, value in points:
+            offset = (day - grid_start).days
+            global_col = offset // 7
+            band_index = global_col // weeks_per_row
+            col_in_band = global_col % weeks_per_row
+            row = offset % 7
+            x1 = GRASS_OUTER_PAD_X + GRASS_LABEL_WIDTH + col_in_band * pitch
+            y1 = band_grid_y(band_index) + row * pitch
+            x2 = x1 + GRASS_CELL_SIZE
+            y2 = y1 + GRASS_CELL_SIZE
+            is_today = day == highlight_day
+            committed_value = committed_values_by_day.get(day, value)
+            fill_color = self.grass_level_color(committed_value)
+            if is_today and effective_uncommitted > 0:
+                fill_color = self.grass_level_color(effective_uncommitted, uncommitted=True)
+            canvas.create_rectangle(
+                x1,
+                y1,
+                x2,
+                y2,
+                fill=fill_color,
+                outline=palette.text if is_today else "",
+                width=1 if is_today else 0,
+            )
 
     def draw_daily_graph(self, points: list[tuple[dt.date, int]], highlight_day: dt.date) -> None:
         canvas = self.graph_canvas

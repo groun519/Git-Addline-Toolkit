@@ -25,12 +25,17 @@ class RefreshSnapshot:
     today_done: int
     today_target: int
     points: list[tuple[dt.date, int]]
+    grass_points: list[tuple[dt.date, int]]
     graph_days: int
     graph_avg: float
     graph_max: int
     branch_total: int
     share_text: str
     uncommitted_deletions: int
+
+
+def get_grass_date_range(day: dt.date) -> tuple[dt.date, dt.date]:
+    return dt.date(day.year, 1, 1), dt.date(day.year, 12, 31)
 
 
 def _compute_branch_total(repo: Path, author: str, tracked_ref: str, current_ref: str) -> int:
@@ -54,16 +59,15 @@ def _compute_all_committed_total(
     return all_base_total + all_committed
 
 
-def _build_graph_points(
+def _build_points_window(
     repo: Path,
     author: str,
     result: TrackerResult,
     config: TrackerConfig,
     tracked_ref: str,
-    graph_days: int,
-) -> tuple[list[tuple[dt.date, int]], float, int]:
-    end_day = result.today
-    start_day = end_day - dt.timedelta(days=graph_days - 1)
+    start_day: dt.date,
+    end_day: dt.date,
+) -> list[tuple[dt.date, int]]:
     committed_by_date = get_committed_insertions_by_date_combined(
         repo,
         start_day,
@@ -74,17 +78,21 @@ def _build_graph_points(
     )
     today_real = dt.date.today()
     points: list[tuple[dt.date, int]] = []
-    for i in range(graph_days):
+    day_count = (end_day - start_day).days + 1
+    for i in range(day_count):
         day = start_day + dt.timedelta(days=i)
         value = committed_by_date.get(day, 0)
-        if day == end_day and day == today_real:
+        if day == result.today and day == today_real:
             value += result.uncommitted_insertions
         points.append((day, value))
+    return points
 
+
+def _summarize_points(points: list[tuple[dt.date, int]]) -> tuple[float, int]:
     values = [value for _, value in points]
     graph_max = max(values) if values else 0
     graph_avg = (sum(values) / len(values)) if values else 0.0
-    return points, graph_avg, graph_max
+    return graph_avg, graph_max
 
 
 def build_refresh_snapshot(repo: Path, author: str, config: TrackerConfig, graph_days: int) -> RefreshSnapshot:
@@ -101,14 +109,26 @@ def build_refresh_snapshot(repo: Path, author: str, config: TrackerConfig, graph
         config.include_local,
     )
     today_done = committed_today + result.uncommitted_insertions
-    points, graph_avg, graph_max = _build_graph_points(
+    graph_start_day = result.today - dt.timedelta(days=graph_days - 1)
+    grass_start_day, grass_end_day = get_grass_date_range(result.today)
+    window_start_day = min(graph_start_day, grass_start_day)
+    window_end_day = grass_end_day
+    all_points = _build_points_window(
         repo,
         author,
         result,
         config,
         tracked_ref,
-        graph_days,
+        window_start_day,
+        window_end_day,
     )
+    graph_start_index = (graph_start_day - window_start_day).days
+    graph_end_index = (result.today - window_start_day).days + 1
+    grass_start_index = (grass_start_day - window_start_day).days
+    grass_end_index = (grass_end_day - window_start_day).days + 1
+    points = all_points[graph_start_index:graph_end_index]
+    grass_points = all_points[grass_start_index:grass_end_index]
+    graph_avg, graph_max = _summarize_points(points)
     share_percent = (result.committed_total / all_committed_total) * 100.0 if all_committed_total > 0 else 0.0
 
     return RefreshSnapshot(
@@ -116,6 +136,7 @@ def build_refresh_snapshot(repo: Path, author: str, config: TrackerConfig, graph
         today_done=today_done,
         today_target=result.need_today,
         points=points,
+        grass_points=grass_points,
         graph_days=graph_days,
         graph_avg=graph_avg,
         graph_max=graph_max,

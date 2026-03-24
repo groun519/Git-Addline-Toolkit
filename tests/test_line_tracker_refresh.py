@@ -9,7 +9,7 @@ if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
 from line_tracker import TrackerConfig, TrackerResult
-from line_tracker_refresh import build_refresh_snapshot
+from line_tracker_refresh import build_refresh_snapshot, get_grass_date_range
 
 
 class RefreshSnapshotTests(unittest.TestCase):
@@ -65,6 +65,8 @@ class RefreshSnapshotTests(unittest.TestCase):
         )
 
         snapshot = build_refresh_snapshot(Path("C:/repo"), "me", config, graph_days=3)
+        grass_start, grass_end = get_grass_date_range(today)
+        grass_length = (grass_end - grass_start).days + 1
 
         self.assertEqual(snapshot.result, result)
         self.assertEqual(snapshot.branch_total, 5)
@@ -72,6 +74,10 @@ class RefreshSnapshotTests(unittest.TestCase):
         self.assertEqual(snapshot.today_target, 10)
         self.assertEqual(snapshot.uncommitted_deletions, 4)
         self.assertEqual(snapshot.points, [(today - dt.timedelta(days=2), 1), (today - dt.timedelta(days=1), 2), (today, 10)])
+        self.assertEqual(len(snapshot.grass_points), grass_length)
+        self.assertEqual(snapshot.grass_points[0][0], grass_start)
+        self.assertEqual(snapshot.grass_points[-1][0], grass_end)
+        self.assertEqual(dict(snapshot.grass_points)[today], 10)
         self.assertEqual(snapshot.graph_max, 10)
         self.assertAlmostEqual(snapshot.graph_avg, 13 / 3)
         self.assertEqual(snapshot.share_text, "75.0%")
@@ -147,8 +153,8 @@ class RefreshSnapshotTests(unittest.TestCase):
         )
         mock_by_date.assert_called_once_with(
             Path("C:/repo"),
-            today - dt.timedelta(days=2),
-            today,
+            min(today - dt.timedelta(days=2), dt.date(today.year, 1, 1)),
+            dt.date(today.year, 12, 31),
             "me",
             "origin/main",
             True,
