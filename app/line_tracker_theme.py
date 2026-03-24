@@ -207,6 +207,26 @@ THEME_PALETTES: dict[str, ThemePalette] = {
         overall_progress_trough="#4a3d2d",
         daily_progress_trough="#554633",
     ),
+    "cyberpunk": ThemePalette(
+        app_bg="#0b0812",
+        card_bg="#161120",
+        border="#3b2a57",
+        text="#f7efff",
+        muted_text="#b6a8ca",
+        accent="#00f0ff",
+        accent_dark="#00b6d1",
+        accent_light="#7cf7ff",
+        accent_alt="#ff4fd8",
+        accent_alt_dark="#cf2fb0",
+        success="#59f6a0",
+        danger="#ff6b8b",
+        canvas_bg="#110c1a",
+        graph_grid="#2a1f3a",
+        button_text="#090711",
+        button_disabled_text="#8f84a5",
+        overall_progress_trough="#20162f",
+        daily_progress_trough="#2a1730",
+    ),
 }
 
 
