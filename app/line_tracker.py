@@ -62,6 +62,7 @@ _CACHE_LOADED = False
 _CACHE_DIRTY = False
 _GIT_EXECUTABLE: str | None = None
 _GIT_SOURCE: str | None = None
+MULTI_AUTHOR_PREFIX = "__LT_MULTI__:"
 
 
 def _git_subprocess_kwargs() -> dict[str, object]:
@@ -76,6 +77,42 @@ def _git_subprocess_kwargs() -> dict[str, object]:
     if create_no_window:
         kwargs["creationflags"] = create_no_window
     return kwargs
+
+
+def encode_author_patterns(patterns: list[str]) -> str:
+    unique_patterns: list[str] = []
+    for raw_pattern in patterns:
+        pattern = str(raw_pattern).strip()
+        if pattern and pattern not in unique_patterns:
+            unique_patterns.append(pattern)
+    if not unique_patterns:
+        return ""
+    if len(unique_patterns) == 1:
+        return unique_patterns[0]
+    return MULTI_AUTHOR_PREFIX + json.dumps(unique_patterns, ensure_ascii=False, separators=(",", ":"))
+
+
+def decode_author_patterns(author: str) -> list[str]:
+    cleaned = str(author).strip()
+    if not cleaned:
+        return []
+    if not cleaned.startswith(MULTI_AUTHOR_PREFIX):
+        return [cleaned]
+
+    raw_payload = cleaned[len(MULTI_AUTHOR_PREFIX):]
+    try:
+        decoded = json.loads(raw_payload)
+    except json.JSONDecodeError:
+        return [cleaned]
+    if not isinstance(decoded, list):
+        return [cleaned]
+
+    patterns: list[str] = []
+    for value in decoded:
+        pattern = str(value).strip()
+        if pattern and pattern not in patterns:
+            patterns.append(pattern)
+    return patterns or [cleaned]
 
 
 def get_app_state_dir() -> Path:
@@ -527,9 +564,18 @@ def get_total_insertions_up_to(
     if cached is not None:
         return cached
 
+    author_patterns = decode_author_patterns(author)
+    if len(author_patterns) > 1:
+        value = sum(get_total_insertions_up_to(repo, ref, pattern) for pattern in author_patterns)
+        with _CACHE_LOCK:
+            _TOTAL_UP_TO_CACHE[cache_key] = value
+            _mark_cache_dirty()
+        return value
+
+    author_pattern = author_patterns[0] if author_patterns else ""
     args = ["log", ref, "--no-renames", "--numstat", "--pretty=tformat:"]
-    if author:
-        args.insert(2, f"--author={author}")
+    if author_pattern:
+        args.insert(2, f"--author={author_pattern}")
     out = run_git(repo, args)
     value = parse_numstat_insertions(out)
     with _CACHE_LOCK:
@@ -553,9 +599,21 @@ def get_committed_insertions(
     if cached is not None:
         return cached
 
+    author_patterns = decode_author_patterns(author)
+    if len(author_patterns) > 1:
+        value = sum(
+            get_committed_insertions(repo, base_commit, pattern, ref, exclude_ref)
+            for pattern in author_patterns
+        )
+        with _CACHE_LOCK:
+            _COMMITTED_INSERTIONS_CACHE[cache_key] = value
+            _mark_cache_dirty()
+        return value
+
+    author_pattern = author_patterns[0] if author_patterns else ""
     args = ["log", f"{base_commit}..{ref}", "--no-renames", "--numstat", "--pretty=tformat:"]
-    if author:
-        args.insert(2, f"--author={author}")
+    if author_pattern:
+        args.insert(2, f"--author={author_pattern}")
     if exclude_ref:
         args.extend(["--not", exclude_ref])
     out = run_git(repo, args)
@@ -647,18 +705,32 @@ def get_committed_insertions_for_date(
     if cached is not None:
         return cached
 
+    author_patterns = decode_author_patterns(author)
+    if len(author_patterns) > 1:
+        value = sum(
+            get_committed_insertions_for_date(repo, day, pattern, ref, exclude_ref)
+            for pattern in author_patterns
+        )
+        with _CACHE_LOCK:
+            _FOR_DATE_CACHE[cache_key] = value
+            _mark_cache_dirty()
+        return value
+
     next_day = day + dt.timedelta(days=1)
-    args = [
-        "log",
-        f"--since={day.isoformat()}",
-        f"--until={next_day.isoformat()}",
-        "--no-renames",
-        "--numstat",
-        "--pretty=tformat:",
-        ref,
-    ]
-    if author:
-        args.insert(3, f"--author={author}")
+    author_pattern = author_patterns[0] if author_patterns else ""
+    args = ["log"]
+    args.extend(
+        [
+            f"--since={day.isoformat()}",
+            f"--until={next_day.isoformat()}",
+            "--no-renames",
+            "--numstat",
+            "--pretty=tformat:",
+            ref,
+        ]
+    )
+    if author_pattern:
+        args.insert(3, f"--author={author_pattern}")
     if exclude_ref:
         args.extend(["--not", exclude_ref])
     out = run_git(repo, args)
@@ -698,6 +770,18 @@ def get_committed_insertions_by_date(
     if cached is not None:
         return dict(cached)
 
+    author_patterns = decode_author_patterns(author)
+    if len(author_patterns) > 1:
+        merged: dict[dt.date, int] = {}
+        for pattern in author_patterns:
+            daily = get_committed_insertions_by_date(repo, start_day, end_day, pattern, ref, exclude_ref)
+            for day, value in daily.items():
+                merged[day] = merged.get(day, 0) + value
+        with _CACHE_LOCK:
+            _BY_DATE_CACHE[cache_key] = dict(merged)
+            _mark_cache_dirty()
+        return merged
+
     repo_key = _repo_key(repo)
     with _CACHE_LOCK:
         for key, value in _BY_DATE_CACHE.items():
@@ -724,18 +808,21 @@ def get_committed_insertions_by_date(
                 return dict(sliced)
 
     until_day = end_day + dt.timedelta(days=1)
-    args = [
-        "log",
-        f"--since={start_day.isoformat()} 00:00:00",
-        f"--until={until_day.isoformat()} 00:00:00",
-        "--no-renames",
-        "--date=short",
-        "--pretty=tformat:@@DATE@@%ad",
-        "--numstat",
-        ref,
-    ]
-    if author:
-        args.insert(3, f"--author={author}")
+    author_pattern = author_patterns[0] if author_patterns else ""
+    args = ["log"]
+    args.extend(
+        [
+            f"--since={start_day.isoformat()} 00:00:00",
+            f"--until={until_day.isoformat()} 00:00:00",
+            "--no-renames",
+            "--date=short",
+            "--pretty=tformat:@@DATE@@%ad",
+            "--numstat",
+            ref,
+        ]
+    )
+    if author_pattern:
+        args.insert(3, f"--author={author_pattern}")
     if exclude_ref:
         args.extend(["--not", exclude_ref])
 

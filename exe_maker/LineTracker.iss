@@ -1,6 +1,9 @@
 [Setup]
 AppName=Line Tracker
-AppVersion=0.1.0
+#ifndef AppVersion
+#define AppVersion "V0.1.000"
+#endif
+AppVersion={#AppVersion}
 DefaultDirName={localappdata}\Programs\LineTracker
 DefaultGroupName=Line Tracker
 DisableProgramGroupPage=yes
@@ -11,6 +14,10 @@ SolidCompression=yes
 WizardStyle=modern
 AppId={{D1E6F5A2-3A8C-4A9F-8D6D-3B2B8F7E6A1D}
 PrivilegesRequired=lowest
+#ifdef AppIconPath
+SetupIconFile={#AppIconPath}
+#endif
+UninstallDisplayIcon={app}\LineTracker.exe
 
 [Files]
 Source: "dist\LineTracker\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

@@ -1,148 +1,184 @@
 # Git Addline Toolkit
 
-Windows-only line tracking UI for Git repos.  
-Shows daily/total progress, committed vs uncommitted additions, and a 1-minute auto refresh option.  
-Designed to live under a repo (e.g. `PROJECT-MA/tools/Git-Addline-Toolkit`), but can target any Git repo via the UI.
+Windows-only Git line tracking UI for any Git repository.
+
+- Monthly progress dashboard for committed and uncommitted added lines
+- Commit memo tab with GitHub Desktop-friendly summary/description copy
+- Git grass tab based on daily added lines
+- Theme support
+- 1-minute auto refresh
+- Installer build flow with tests and smoke verification
+
+Current app version is managed by [VERSION](/c:/Users/groun/Documents/git-repositories/PROJECT-MA/tools/Git-Addline-Toolkit/VERSION).
+
+## Main Features
+
+- Track a target line goal for the current month
+- Show committed totals, branch-only additions, uncommitted additions, and progress bars
+- Show a daily additions graph for 7 to 180 days
+- Edit a raw memo block that is auto-parsed into `Title / DONE / TODO`
+- Copy memo output into GitHub Desktop `Summary` / `Description`
+- Show a yearly Git grass view with theme-aware colors
+- Filter by user
+  The selector merges obvious duplicates such as primary email and GitHub noreply variants when they resolve to the same handle.
+- Switch UI themes
+  Built-in themes currently include `Forest`, `Cream`, `Slate`, `Dark`, `VS`, `Neon`, `Cherry`, `Discord`, and `MC`.
 
 ## End-user Install
 
-다른 사용자에게 공유할 때는 소스 폴더가 아니라 설치 파일을 보내는 방식이 기준입니다.
+공유할 때는 소스 폴더가 아니라 설치 파일을 보내는 방식이 기준입니다.
 
 1. `exe_maker\build_installer.bat`로 `exe_maker\dist\LineTrackerSetup.exe`를 만듭니다.
-2. 그 설치 파일을 상대방에게 전달합니다.
-3. 상대방은 설치 후 시작 메뉴나 바탕화면 아이콘으로 실행합니다.
-4. UI에서 `리포 경로`를 설정하고 `리포 선택` -> `새로고침`을 누릅니다.
+2. 설치 파일을 전달합니다.
+3. 받은 사용자는 설치 후 실행합니다.
+4. UI에서 `리포 경로`를 지정하고 `리포 선택` 후 `새로고침`을 누릅니다.
 
 설치본 기준:
+
 - Python은 필요 없습니다.
 - Git은 필요합니다.
-- 단, `vendor\PortableGit\cmd\git.exe`를 넣고 빌드하면 Git도 함께 번들됩니다.
-- PortableGit 번들 위치 설명은 `vendor\PortableGit\README.md`에 정리돼 있습니다.
-- 기본 설치 경로는 `%LocalAppData%\Programs\LineTracker`라서 관리자 권한 없이 설치됩니다.
+- `vendor\PortableGit\cmd\git.exe`를 넣고 빌드하면 Git도 함께 번들됩니다.
+- 기본 설치 경로는 `%LocalAppData%\Programs\LineTracker`입니다.
+- 설정과 캐시는 `%LocalAppData%\LineTracker`에 저장됩니다.
+
+업데이트:
+
+- 기존 사용자는 새 설치 파일을 다시 실행하면 같은 위치에 덮어써서 업데이트할 수 있습니다.
+- 설정과 캐시는 유지됩니다.
+
+언인스톨:
+
+- Windows 앱 목록 또는 제어판에서 제거할 수 있습니다.
+- 앱 제거 후에도 `%LocalAppData%\LineTracker` 아래 설정/캐시는 남을 수 있습니다.
 
 ## Source Run Requirements
 
 - Windows
-- Python 3.x in PATH
-- Git in PATH, 또는 `LINE_TRACKER_GIT`/번들 `PortableGit`
+- Python 3.10+
+- Git in PATH, 또는 `LINE_TRACKER_GIT` / 번들 `PortableGit`
 
 ## Source Quick Start
 
-1. Open `line_tracker_ui_click.vbs` (double click).
-2. In the UI, set `리포 경로` to the repo you want to track.
-3. Click `리포 선택` (or press Enter in the path field).
-4. Click `새로고침`.
+1. [line_tracker_ui_click.vbs](/c:/Users/groun/Documents/git-repositories/PROJECT-MA/tools/Git-Addline-Toolkit/line_tracker_ui_click.vbs)를 실행합니다.
+2. UI에서 `리포 경로`를 설정합니다.
+3. `리포 선택`을 누릅니다.
+4. `새로고침`을 누릅니다.
 
-The selected repo path is saved and restored on next launch.
+선택한 리포 경로와 UI 설정은 다음 실행 때 복원됩니다.
 
 ## What Runs What
 
-- `line_tracker_ui_click.vbs`  
-  Source 실행용 런처입니다. `pythonw`가 있으면 콘솔 없이 실행하고, 없으면 `python`을 사용합니다.
+- [line_tracker_ui_click.vbs](/c:/Users/groun/Documents/git-repositories/PROJECT-MA/tools/Git-Addline-Toolkit/line_tracker_ui_click.vbs)
+  Source 실행용 런처입니다. `pythonw`가 있으면 콘솔 없이 실행합니다.
+- [app/line_tracker_ui.pyw](/c:/Users/groun/Documents/git-repositories/PROJECT-MA/tools/Git-Addline-Toolkit/app/line_tracker_ui.pyw)
+  GUI 진입점입니다.
+- [app/line_tracker_ui.py](/c:/Users/groun/Documents/git-repositories/PROJECT-MA/tools/Git-Addline-Toolkit/app/line_tracker_ui.py)
+  메인 UI 셸입니다.
+- [app/line_tracker.py](/c:/Users/groun/Documents/git-repositories/PROJECT-MA/tools/Git-Addline-Toolkit/app/line_tracker.py)
+  Git 집계 엔진과 CLI입니다.
+- [exe_maker/dist/LineTrackerSetup.exe](/c:/Users/groun/Documents/git-repositories/PROJECT-MA/tools/Git-Addline-Toolkit/exe_maker/dist/LineTrackerSetup.exe)
+  공유용 설치 파일입니다.
 
-- `exe_maker\dist\LineTrackerSetup.exe`  
-  공유용 설치 파일입니다. 설치 후에는 번들 EXE로 실행되며 Python이 필요 없습니다.
+내부 상태 파일:
 
-Internal state files are stored in `%LocalAppData%\LineTracker`:
-
-- `app/line_tracker_ui.py` (UI)
-- `app/line_tracker.py` (metrics engine)
-- `%LocalAppData%\LineTracker\line_tracker_ui_settings.json` (saved UI settings)
-- `%LocalAppData%\LineTracker\line_tracker_cache.json` (computed caches)
+- `%LocalAppData%\LineTracker\line_tracker_ui_settings.json`
+- `%LocalAppData%\LineTracker\line_tracker_cache.json`
 
 ## UI Overview
 
-### Main Cards
+### Dashboard
 
-- Today Date / Days Left: Based on current date or custom date.
-- Daily Required Lines: Remaining goal divided by remaining days.
-- Branch/Uncommitted stats: Committed additions per branch and uncommitted changes.
-- Current Changes: Two mini boxes show `+` (green) and `-` (red).
-- Progress Bars: Overall and daily progress with percentages.
+- `오늘 날짜 / 남은 날짜`
+- `일일 필요 추가줄`
+- `현재 추가줄(미커밋)`
+- `현재 브랜치 단독 추가줄(커밋)`
+- `내 추가줄 비중`
+- `전체 진행률 / 일일 진행률`
+- `현재 변경 + / -`
+- `일별 추가줄 그래프`
 
-### Graph
+### Commit Memo Tab
 
-- Shows daily committed additions for the selected period (7~180 days).
-- Shows average and max for the period.
+- 원문 텍스트 하나를 자유롭게 편집합니다.
+- 첫 줄은 제목, 나머지는 `DONE / TODO`로 자동 분리됩니다.
+- 미리보기에서 항목을 `DONE`과 `TODO` 사이로 이동할 수 있습니다.
+- `제목 복사` / `설명 복사`로 GitHub Desktop에 붙여넣을 수 있습니다.
+- 메모는 자동 저장됩니다.
 
-### Settings
+기본 양식 예시:
 
-- `날짜 커스텀`: Use a fixed date (for retro checks).
-- `목표 줄수`: Total goal line count.
-- `유저 선택`: Filters by user (auto, all, or specific).
-- `리포 경로`: Target repo to track.
-- `1분마다 자동 업데이트`: Periodic refresh.
+```text
+[제목 입력]
 
-### Commit Memo
+DONE
+-
 
-Simple local memo area:
-- Edit one raw text block.
-- The first line becomes `Title`.
-- Remaining lines are parsed into `DONE` / `TODO`.
-- Items can be moved between `DONE` and `TODO` with buttons in the preview.
+TODO
+-
+-
+```
 
-Behavior:
-- Memo text is saved automatically into settings.
-- Empty state starts with a `Title / DONE / TODO` template.
-- `제목 복사` / `설명 복사`로 GitHub Desktop의 `Summary` / `Description` 칸에 붙여넣을 수 있습니다.
+### Git Grass Tab
 
-## Selecting a Repo
+- 현재 연도 전체를 2줄 레이아웃으로 표시합니다.
+- 기준은 `일별 추가줄 수`입니다.
+- 오늘의 미커밋 추가줄이 있으면 오늘 칸은 파란 계열로 표시됩니다.
+- 하단에는 활동일, 총 추가줄, 활동일 기준 평균 줄 수를 보여줍니다.
 
-Because this toolkit itself is a Git repo, you must point the tracker at the actual project repo.
+### User Filter
 
-Steps:
-1. Set `리포 경로` to the project folder (e.g. `C:\Users\groun\Documents\git-repositories\PROJECT-MA`).
-2. Click `리포 선택`.
-3. Refresh.
+- `자동(내 계정)`, `전체`, 또는 특정 유저를 선택할 수 있습니다.
+- 가능한 경우 같은 계정의 여러 identity를 하나로 합쳐서 보여줍니다.
 
-The repo path is stored in `%LocalAppData%\LineTracker\line_tracker_ui_settings.json` under `repo_path`.
+### Themes
 
-## Command Line (Optional)
+- 상단 `테마` 콤보에서 즉시 전환할 수 있습니다.
+- 테마 선택은 설정에 저장됩니다.
 
-You can run the CLI directly:
+## Command Line
+
+CLI도 직접 실행할 수 있습니다.
 
 ```bat
 python app\line_tracker.py --repo C:\path\to\repo
 ```
 
-The UI uses the same engine under the hood.
+UI는 같은 엔진을 사용합니다.
 
-## Troubleshooting
+## Build Installer
 
-- UI shows the toolkit repo instead of your project:
-  - Set `리포 경로` and click `리포 선택`, then refresh.
-- No output / zero lines:
-  - Make sure Git is available and the repo has commits.
-- Installed app says Git is missing:
-  - Install Git for Windows, or rebuild the installer with `vendor\PortableGit` bundled.
-- Slow refresh:
-  - Large repos with many commits can take time. Use auto refresh sparingly.
+윈도우 배포는 `PyInstaller + Inno Setup` 조합을 사용합니다.
 
-## Notes
+### Prerequisites
 
-- Uncommitted changes include untracked text files.
-- Rename handling is disabled to match GitHub-style stats.
-- Works best when launched from `line_tracker_ui_click.vbs`.
-# 배포(설치 파일) 만들기
-
-윈도우에서 설치 후 사용이 편한 방식은 `PyInstaller + Inno Setup` 조합입니다.
-
-## 준비물
 - Python 3.10+
-- Inno Setup (iscc.exe가 PATH에 있어야 함)
+- Inno Setup
 
-## 선택사항: Git까지 같이 번들하기
-- `vendor\PortableGit\cmd\git.exe`가 있으면 빌드 스크립트가 자동으로 설치본에 포함합니다.
+### Optional: Bundle Git
+
+- `vendor\PortableGit\cmd\git.exe`가 있으면 빌드 시 설치본에 포함됩니다.
 - 이 경우 설치받는 사용자는 Git을 따로 설치하지 않아도 됩니다.
-- 저장소에는 `vendor\PortableGit\README.md`만 추적되고, 실제 PortableGit 파일은 Git에서 제외됩니다.
+- 위치 설명은 [vendor/PortableGit/README.md](/c:/Users/groun/Documents/git-repositories/PROJECT-MA/tools/Git-Addline-Toolkit/vendor/PortableGit/README.md)에 있습니다.
 
-## 빌드
+### Optional: Custom App Icon
+
+- `assets\line_tracker.ico`를 두면 소스 UI, PyInstaller EXE, 설치파일 아이콘에 같이 사용됩니다.
+- 아이콘이 없으면 기존처럼 기본 아이콘으로 빌드됩니다.
+
+### Versioning
+
+- 앱 버전 원본은 [VERSION](/c:/Users/groun/Documents/git-repositories/PROJECT-MA/tools/Git-Addline-Toolkit/VERSION) 한 군데입니다.
+- 형식은 `V0.1.000`처럼 사용합니다.
+- 빌드 스크립트와 설치 스크립트는 이 값을 같이 사용합니다.
+
+### Build Steps
+
 1. `exe_maker\build_installer.bat` 실행
-2. 스크립트가 `python -m unittest discover -s tests -v`를 먼저 실행
-3. 테스트 통과 후 GUI 앱과 `LineTrackerCli.exe`를 함께 빌드
-4. 설치 파일을 빌드
-5. 이어서 `exe_maker\smoke_test_installer.bat`로 무소음 설치 + 설치본 CLI 실행 검증
-6. 모든 단계 통과 후 `exe_maker\dist\LineTrackerSetup.exe` 사용
+2. `python -m unittest discover -s tests -t . -v` 실행
+3. 테스트 통과 후 GUI 앱과 `LineTrackerCli.exe` 빌드
+4. Inno Setup으로 설치 파일 생성
+5. `exe_maker\smoke_test_installer.bat`로 무소음 설치 + 설치본 CLI 스모크 검증
+6. 최종 결과물은 `exe_maker\dist\LineTrackerSetup.exe`
 
 스모크 검증을 건너뛰고 싶으면:
 
@@ -151,7 +187,19 @@ set LINE_TRACKER_SKIP_SMOKE=1
 exe_maker\build_installer.bat
 ```
 
-## 결과
-- 설치 후 시작메뉴/바탕화면 아이콘 제공
-- 설치 폴더에 `setup\setup_check.bat` 포함
-- 번들 `PortableGit`가 있으면 설치 직후 바로 실행 가능
+## Troubleshooting
+
+- 설치본에서 Git이 없다고 나옴
+  Git for Windows를 설치하거나 `vendor\PortableGit`를 번들해서 다시 빌드하세요.
+- 내 프로젝트가 아니라 툴 저장소가 잡힘
+  `리포 경로`를 프로젝트 폴더로 바꾸고 `리포 선택` 후 `새로고침` 하세요.
+- 0줄만 보임
+  Git이 가능한 리포인지, 선택한 유저 필터가 맞는지 확인하세요.
+- 새 설치파일로 업데이트하고 싶음
+  같은 설치파일을 다시 실행하면 됩니다.
+
+## Notes
+
+- 미커밋 추가줄에는 untracked text file도 포함됩니다.
+- rename handling은 GitHub-style 통계에 가깝게 맞추기 위해 꺼져 있습니다.
+- 현재 저장소에는 테스트 23개가 포함돼 있습니다.

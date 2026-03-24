@@ -8,6 +8,7 @@ APP_DIR = Path(__file__).resolve().parents[1] / "app"
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
+from line_tracker import encode_author_patterns
 from line_tracker_ui import LineTrackerApp, UISettings
 
 
@@ -50,6 +51,34 @@ class SettingsTests(unittest.TestCase):
         )
         self.assertEqual(mapping["Alice <alice@example.com>"], "alice@example\\.com")
         self.assertEqual(aliases["Alice\\ Kim\\ <alice@example\\.com>"], "Alice <alice@example.com>")
+
+    def test_build_author_option_entries_merges_matching_github_noreply_and_primary_email(self) -> None:
+        options, mapping, aliases = LineTrackerApp._build_author_option_entries(
+            [
+                "groun519 <54619610+groun519@users.noreply.github.com>",
+                "groun519 <groun519@gmail.com>",
+            ],
+            "Auto",
+            "All",
+        )
+
+        self.assertEqual(
+            options,
+            ["Auto", "All", "groun519 <groun519@gmail.com>"],
+        )
+        self.assertEqual(
+            mapping["groun519 <groun519@gmail.com>"],
+            encode_author_patterns(
+                [
+                    "54619610\\+groun519@users\\.noreply\\.github\\.com",
+                    "groun519@gmail\\.com",
+                ]
+            ),
+        )
+        self.assertEqual(
+            aliases["54619610\\+groun519@users\\.noreply\\.github\\.com"],
+            "groun519 <groun519@gmail.com>",
+        )
 
     def test_ui_settings_from_dict_preserves_defaults_and_legacy_fields(self) -> None:
         settings = UISettings.from_dict(

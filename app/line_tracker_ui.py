@@ -17,15 +17,12 @@ from tkinter import filedialog, messagebox, ttk
 
 from line_tracker_memo import (
     MemoLabels,
-    build_memo_text,
     coerce_saved_memo_text,
     default_memo_text,
     get_placeholder_titles,
-    move_memo_item_between_sections,
-    normalize_loaded_memo_text,
-    parse_memo_text,
-    split_commit_message,
 )
+from line_tracker_memo_panel import MemoPanel, MemoPanelBindings
+from line_tracker_grass_panel import GrassPanel, GrassPanelBindings
 from line_tracker import (
     DEFAULT_AUTHOR,
     DEFAULT_BASE_COMMIT,
@@ -38,6 +35,7 @@ from line_tracker import (
     get_app_state_path,
     get_legacy_state_path,
     clear_cache_for_repo,
+    encode_author_patterns,
     find_repo_root,
     get_git_info,
     run_git,
@@ -53,6 +51,7 @@ from line_tracker_theme import (
     resolve_theme_name,
 )
 from line_tracker_refresh import RefreshSnapshot, build_refresh_snapshot
+from line_tracker_version import format_app_title
 
 AUTO_REFRESH_MS = 60_000
 GRAPH_CANVAS_WIDTH = 420
@@ -63,49 +62,6 @@ NOTE_CARD_WIDTH = 420
 NOTE_CARD_FIT_PADDING = 8
 CARD_SCROLLBAR_STYLE = "Card.Vertical.TScrollbar"
 FOOTER_LOADING_STYLE = "Loading.Horizontal.TProgressbar"
-GRASS_SPLIT_ROWS = 2
-GRASS_CELL_SIZE = 15
-GRASS_CELL_GAP = 5
-GRASS_BAND_DAY_ROWS = 7
-GRASS_BAND_GAP = 36
-GRASS_OUTER_PAD_X = 18
-GRASS_OUTER_PAD_Y = 16
-GRASS_LABEL_WIDTH = 30
-GRASS_MONTH_LABEL_HEIGHT = 18
-GRASS_WEEKS_PER_ROW = 27
-GRASS_PANEL_PAD_X = 8
-GRASS_LEGEND_SWATCH = 12
-GRASS_LEGEND_GAP_X = 10
-GRASS_FIXED_LEVEL_BANDS = (
-    (1, 99),
-    (100, 299),
-    (300, 699),
-    (700, None),
-)
-GRASS_UNCOMMITTED_LEVEL_COLORS = (
-    "#a9c3ff",
-    "#7ea6ff",
-    "#4d86f0",
-    "#2f63cf",
-)
-GRASS_CANVAS_WIDTH = (
-    (GRASS_OUTER_PAD_X * 2)
-    + GRASS_LABEL_WIDTH
-    + (GRASS_WEEKS_PER_ROW * GRASS_CELL_SIZE)
-    + ((GRASS_WEEKS_PER_ROW - 1) * GRASS_CELL_GAP)
-)
-GRASS_CANVAS_HEIGHT = (
-    (GRASS_OUTER_PAD_Y * 2)
-    + (GRASS_MONTH_LABEL_HEIGHT * GRASS_SPLIT_ROWS)
-    + (
-        (
-            (GRASS_BAND_DAY_ROWS * GRASS_CELL_SIZE)
-            + ((GRASS_BAND_DAY_ROWS - 1) * GRASS_CELL_GAP)
-        )
-        * GRASS_SPLIT_ROWS
-    )
-    + GRASS_BAND_GAP
-)
 BASE_WINDOW_WIDTH = 1440
 BASE_WINDOW_HEIGHT = 675
 MIN_WINDOW_WIDTH = 1100
@@ -116,6 +72,8 @@ SETTINGS_FILE_NAME = "line_tracker_ui_settings.json"
 WINDOW_SCREEN_MARGIN = 80
 GEOMETRY_RE = re.compile(r"^(?P<width>\d+)x(?P<height>\d+)(?:(?P<x>[+-]\d+)(?P<y>[+-]\d+))?$")
 AUTHOR_IDENTITY_RE = re.compile(r"^(?P<name>.+?)\s*<(?P<email>[^<>]+)>$")
+AUTHOR_HANDLE_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$")
+GITHUB_NOREPLY_DOMAIN = "users.noreply.github.com"
 
 LANG_OPTIONS = {"한국어": "ko", "English": "en"}
 LANG_DISPLAY = {"ko": "한국어", "en": "English"}
@@ -130,6 +88,9 @@ TEXT = {
         "theme_dark": "다크",
         "theme_vs": "VS",
         "theme_neon": "네온",
+        "theme_cherry": "체리",
+        "theme_discord": "디스코드",
+        "theme_mc": "MC",
         "repo_label": "리포 경로",
         "repo_select": "리포 선택",
         "graph_title": "일별 추가줄 그래프",
@@ -160,7 +121,7 @@ TEXT = {
         "grass_legend_open": "{start}줄+",
         "grass_uncommitted_legend": "미커밋(같은 구간)",
         "settings": "설정",
-        "custom_date": "날짜 커스텀(YYYY-MM-DD)",
+        "custom_date": "커스텀 날짜 사용",
         "apply_date": "날짜 적용",
         "goal_label": "목표 줄수",
         "apply_goal": "목표 적용",
@@ -176,6 +137,7 @@ TEXT = {
         "refresh": "새로고침",
         "copy": "복사",
         "loading": "새로고침 중...",
+        "loading_detail": "사용자 정보를 불러오는 중...",
         "status_updated": "업데이트: {time}",
         "status_auto_suffix": " (자동 1분 ON)",
         "status_clipboard": "클립보드에 복사됨",
@@ -219,6 +181,9 @@ TEXT = {
         "theme_dark": "Dark",
         "theme_vs": "VS",
         "theme_neon": "Neon",
+        "theme_cherry": "Cherry",
+        "theme_discord": "Discord",
+        "theme_mc": "MC",
         "repo_label": "Repository",
         "repo_select": "Browse",
         "graph_title": "Daily Additions Graph",
@@ -249,7 +214,7 @@ TEXT = {
         "grass_legend_open": "{start}+ lines",
         "grass_uncommitted_legend": "Uncommitted (same bands)",
         "settings": "Settings",
-        "custom_date": "Custom Date (YYYY-MM-DD)",
+        "custom_date": "Use Custom Date",
         "apply_date": "Apply Date",
         "goal_label": "Goal Lines",
         "apply_goal": "Apply Goal",
@@ -265,6 +230,7 @@ TEXT = {
         "refresh": "Refresh",
         "copy": "Copy",
         "loading": "Refreshing...",
+        "loading_detail": "Loading user information...",
         "status_updated": "Updated: {time}",
         "status_auto_suffix": " (auto 1 min ON)",
         "status_clipboard": "Copied to clipboard",
@@ -308,6 +274,18 @@ FONT_TILE_LABEL = ("Bahnschrift", 9)
 FONT_TILE_VALUE = ("Bahnschrift", 12, "bold")
 FONT_CHIP = ("Bahnschrift", 9)
 FONT_MONO = ("Cascadia Mono", 10)
+
+
+def get_app_icon_path() -> Path | None:
+    if getattr(sys, "frozen", False):
+        bundle_root = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
+        candidate = bundle_root / "assets" / "line_tracker.ico"
+        if candidate.is_file():
+            return candidate
+    candidate = Path(__file__).resolve().parents[1] / "assets" / "line_tracker.ico"
+    if candidate.is_file():
+        return candidate
+    return None
 
 
 @dataclass(frozen=True)
@@ -365,6 +343,30 @@ class UISettings:
             "theme": self.theme,
             "geometry": self.geometry,
         }
+
+
+def _hex_to_rgb(value: str) -> tuple[int, int, int]:
+    cleaned = value.strip().lstrip("#")
+    if len(cleaned) != 6:
+        raise ValueError(f"Expected #RRGGBB color, got {value!r}")
+    return tuple(int(cleaned[index:index + 2], 16) for index in (0, 2, 4))
+
+
+def blend_hex(base: str, overlay: str, ratio: float) -> str:
+    mix_ratio = min(max(ratio, 0.0), 1.0)
+    base_rgb = _hex_to_rgb(base)
+    overlay_rgb = _hex_to_rgb(overlay)
+    blended = tuple(
+        round(base_channel + (overlay_channel - base_channel) * mix_ratio)
+        for base_channel, overlay_channel in zip(base_rgb, overlay_rgb)
+    )
+    return "#" + "".join(f"{channel:02x}" for channel in blended)
+
+
+def contrast_text_color(background: str) -> str:
+    red, green, blue = _hex_to_rgb(background)
+    luminance = ((red * 299) + (green * 587) + (blue * 114)) / 1000
+    return "#10161c" if luminance >= 150 else "#f5f8fb"
 
 
 def parse_date(value: str) -> dt.date:
@@ -467,7 +469,13 @@ class LineTrackerApp:
         self.author_display = display_value
         self.author = resolve_author(self.repo, self.author_raw)
 
-        self.root.title("PROJECT-MA Line Tracker")
+        self.root.title(format_app_title())
+        icon_path = get_app_icon_path()
+        if icon_path is not None:
+            try:
+                self.root.iconbitmap(default=str(icon_path))
+            except tk.TclError:
+                pass
         self.root.resizable(False, False)
         self.root.configure(bg=self.theme.app_bg)
         self.root.columnconfigure(0, weight=1)
@@ -521,13 +529,10 @@ class LineTrackerApp:
         self.branch_total_committed = 0
         self.graph_points: list[tuple[dt.date, int]] = []
         self.graph_highlight_day: dt.date | None = None
-        self.grass_points: list[tuple[dt.date, int]] = []
-        self.grass_highlight_day: dt.date | None = None
-        self.grass_uncommitted_today = 0
+        self.grass_panel_controller: GrassPanel | None = None
         self.active_note_tab = "memo"
         self.memo_text_value = saved_memo_text
-        self.memo_autosave_job: str | None = None
-        self.memo_widget_updating = False
+        self.memo_panel_controller: MemoPanel | None = None
         self.repo_entry_var = tk.StringVar(value=str(self.repo) if self.repo_selected else "")
 
     def _build_header(self, container: ttk.Frame) -> None:
@@ -536,7 +541,7 @@ class LineTrackerApp:
         header_frame.columnconfigure(2, weight=1)
         self.header_accent_bar = tk.Frame(header_frame, bg=self.theme.accent, width=6, height=34)
         self.header_accent_bar.grid(row=0, column=0, rowspan=2, sticky="ns", padx=(0, 10))
-        self.title_label = ttk.Label(header_frame, text=self.t("window_title"), style="Title.TLabel")
+        self.title_label = ttk.Label(header_frame, text=format_app_title(self.t("window_title")), style="Title.TLabel")
         self.title_label.grid(row=0, column=1, sticky="w")
         self.subtitle_label = ttk.Label(
             header_frame,
@@ -862,121 +867,33 @@ class LineTrackerApp:
         self.grass_panel.grid(row=0, column=0, sticky="nsew")
         self.grass_panel.columnconfigure(0, weight=1)
 
-        self._build_memo_tab_contents(self.memo_panel)
-        self._build_grass_tab_contents(self.grass_panel)
-        self.set_memo_text(self.memo_text_value)
-        self.refresh_grass_panel()
+        self.memo_panel_controller = MemoPanel(
+            MemoPanelBindings(
+                root=self.root,
+                translate=self.t,
+                get_theme=lambda: self.theme,
+                get_labels=self.memo_labels,
+                get_placeholder_titles=self._placeholder_memo_titles,
+                save_settings=self.save_settings,
+                copy_to_clipboard=self.copy_to_clipboard,
+                show_error=self.show_error,
+                font_mono=FONT_MONO,
+                scrollbar_style=CARD_SCROLLBAR_STYLE,
+            ),
+            initial_text=self.memo_text_value,
+        )
+        self.memo_panel_controller.build(self.memo_panel)
+        self.grass_panel_controller = GrassPanel(
+            GrassPanelBindings(
+                translate=self.t,
+                get_theme=lambda: self.theme,
+                format_month_label=self.format_month_label,
+            )
+        )
+        self.grass_panel_controller.build(self.grass_panel)
+        self.grass_panel_controller.refresh()
         self.freeze_note_panel_size()
         self.set_note_tab(self.active_note_tab)
-
-    def _build_memo_tab_contents(self, parent: ttk.Frame) -> None:
-        self.note_editor_label = ttk.Label(parent, text=self.t("memo_editor"), style="CardLabel.TLabel")
-        self.note_editor_label.grid(row=0, column=0, sticky="w", pady=(2, 0))
-
-        editor_frame = ttk.Frame(parent, style="CardInner.TFrame")
-        editor_frame.grid(row=1, column=0, sticky="ew", pady=(4, 4))
-        editor_frame.columnconfigure(0, weight=1)
-
-        self.memo_text_widget = tk.Text(
-            editor_frame,
-            height=8,
-            wrap="word",
-            bg=self.theme.card_bg,
-            fg=self.theme.text,
-            insertbackground=self.theme.text,
-            highlightthickness=1,
-            highlightbackground=self.theme.border,
-            highlightcolor=self.theme.accent,
-            relief="flat",
-            font=FONT_MONO,
-            undo=True,
-        )
-        self.memo_text_widget.grid(row=0, column=0, sticky="ew")
-        self.memo_text_widget.bind("<<Modified>>", self.on_memo_text_modified)
-        self.memo_text_widget.bind("<FocusOut>", self.on_memo_text_focus_out)
-
-        self.memo_text_scroll = ttk.Scrollbar(
-            editor_frame,
-            orient="vertical",
-            command=self.memo_text_widget.yview,
-            style=CARD_SCROLLBAR_STYLE,
-        )
-        self.memo_text_scroll.grid(row=0, column=1, sticky="ns", padx=(6, 0))
-        self.memo_text_widget.configure(yscrollcommand=self.memo_text_scroll.set)
-        self._bind_vertical_mousewheel(self.memo_text_widget, self.memo_text_widget)
-
-        self.note_hint_label = ttk.Label(parent, text=self.t("memo_hint"), style="CardLabel.TLabel")
-        self.note_hint_label.grid(row=2, column=0, sticky="w", pady=(2, 8))
-
-        self.note_preview_label = ttk.Label(parent, text=self.t("memo_preview"), style="CardLabel.TLabel")
-        self.note_preview_label.grid(row=3, column=0, sticky="w", pady=(2, 0))
-
-        preview_frame = ttk.Frame(parent, style="CardInner.TFrame")
-        preview_frame.grid(row=4, column=0, sticky="ew", pady=(4, 8))
-        preview_frame.columnconfigure(0, weight=1)
-
-        self.memo_preview_canvas = tk.Canvas(
-            preview_frame,
-            height=180,
-            bg=self.theme.card_bg,
-            highlightthickness=1,
-            highlightbackground=self.theme.border,
-        )
-        self.memo_preview_canvas.grid(row=0, column=0, sticky="ew")
-
-        self.memo_preview_scroll = ttk.Scrollbar(
-            preview_frame,
-            orient="vertical",
-            command=self.memo_preview_canvas.yview,
-            style=CARD_SCROLLBAR_STYLE,
-        )
-        self.memo_preview_scroll.grid(row=0, column=1, sticky="ns", padx=(6, 0))
-        self.memo_preview_canvas.configure(yscrollcommand=self.memo_preview_scroll.set)
-
-        self.memo_preview_inner = ttk.Frame(self.memo_preview_canvas, style="CardInner.TFrame")
-        self.memo_preview_window = self.memo_preview_canvas.create_window(
-            (0, 0),
-            window=self.memo_preview_inner,
-            anchor="nw",
-        )
-        self.memo_preview_inner.bind("<Configure>", self._on_memo_preview_configure)
-        self.memo_preview_canvas.bind("<Configure>", self._on_memo_preview_canvas_configure)
-        self._bind_vertical_mousewheel(self.memo_preview_canvas, self.memo_preview_canvas)
-        self._bind_vertical_mousewheel(self.memo_preview_inner, self.memo_preview_canvas)
-
-        note_actions = ttk.Frame(parent, style="CardInner.TFrame")
-        note_actions.grid(row=5, column=0, sticky="e")
-        self.copy_summary_button = ttk.Button(
-            note_actions,
-            text=self.t("copy_summary"),
-            command=self.copy_commit_summary,
-        )
-        self.copy_summary_button.grid(row=0, column=0, sticky="e")
-        self.copy_description_button = ttk.Button(
-            note_actions,
-            text=self.t("copy_description"),
-            command=self.copy_commit_description,
-        )
-        self.copy_description_button.grid(row=0, column=1, sticky="e", padx=(8, 0))
-
-    def _build_grass_tab_contents(self, parent: ttk.Frame) -> None:
-        parent.rowconfigure(3, weight=1)
-        self.grass_legend_frame = ttk.Frame(parent, style="CardInner.TFrame")
-        self.grass_legend_frame.grid(row=0, column=0, sticky="w", padx=GRASS_PANEL_PAD_X, pady=(4, 0))
-
-        self.grass_canvas = tk.Canvas(
-            parent,
-            width=GRASS_CANVAS_WIDTH,
-            height=GRASS_CANVAS_HEIGHT,
-            bg=self.theme.card_bg,
-            highlightthickness=1,
-            highlightbackground=self.theme.border,
-        )
-        self.grass_canvas.grid(row=1, column=0, sticky="w", padx=GRASS_PANEL_PAD_X, pady=(10, 0))
-
-        self.grass_summary_var = tk.StringVar(value="")
-        self.grass_summary_label = ttk.Label(parent, textvariable=self.grass_summary_var, style="CardLabel.TLabel")
-        self.grass_summary_label.grid(row=2, column=0, sticky="w", padx=GRASS_PANEL_PAD_X, pady=(12, 10))
 
     def _build_controls_section(
         self,
@@ -1081,11 +998,16 @@ class LineTrackerApp:
         self.loading_bar.grid(row=1, column=1, sticky="w", padx=(6, 0), pady=(6, 0))
         self.loading_bar.grid_remove()
 
+        self.loading_detail_var = tk.StringVar(value="")
+        self.loading_detail_label = ttk.Label(footer_right, textvariable=self.loading_detail_var, style="Muted.TLabel")
+        self.loading_detail_label.grid(row=0, column=0, sticky="e", padx=(0, 10))
+        self.loading_detail_label.grid_remove()
+
         self.refresh_button = ttk.Button(footer_right, text=self.t("refresh"), command=self.refresh, style="Accent.TButton")
-        self.refresh_button.grid(row=0, column=0, sticky="e")
+        self.refresh_button.grid(row=0, column=1, sticky="e")
 
         self.copy_button = ttk.Button(footer_right, text=self.t("copy"), command=self.copy_output)
-        self.copy_button.grid(row=0, column=1, sticky="e", padx=(8, 0))
+        self.copy_button.grid(row=0, column=2, sticky="e", padx=(8, 0))
 
     def _finish_startup(self, args: argparse.Namespace, default_today_text: str) -> None:
         self.current_output = ""
@@ -1141,6 +1063,9 @@ class LineTrackerApp:
             return text.format(**kwargs)
         except (KeyError, ValueError):
             return text
+
+    def show_error(self, message: str) -> None:
+        messagebox.showerror(format_app_title(self.t("window_title")), message)
 
     def theme_display_label(self, theme_name: str) -> str:
         return self.t(f"theme_{theme_name}")
@@ -1243,8 +1168,8 @@ class LineTrackerApp:
             self.tile_value_vars[idx].set(value)
 
     def apply_language(self) -> None:
-        self.root.title(self.t("window_title"))
-        self.title_label.configure(text=self.t("window_title"))
+        self.root.title(format_app_title(self.t("window_title")))
+        self.title_label.configure(text=format_app_title(self.t("window_title")))
         self.lang_label.configure(text=self.t("lang_label"))
         self.theme_label.configure(text=self.t("theme_label"))
         self.repo_header_label.configure(text=self.t("repo_label"))
@@ -1255,13 +1180,10 @@ class LineTrackerApp:
         self.graph_days_label.configure(text=self.t("graph_period"))
         self.memo_tab_button.configure(text=self.t("tab_memo"))
         self.grass_tab_button.configure(text=self.t("tab_grass"))
-        self.note_editor_label.configure(text=self.t("memo_editor"))
-        self.note_hint_label.configure(text=self.t("memo_hint"))
-        self.note_preview_label.configure(text=self.t("memo_preview"))
-        self.copy_summary_button.configure(text=self.t("copy_summary"))
-        self.copy_description_button.configure(text=self.t("copy_description"))
-        self.refresh_memo_preview()
-        self.refresh_grass_panel()
+        if self.memo_panel_controller is not None:
+            self.memo_panel_controller.apply_language()
+        if self.grass_panel_controller is not None:
+            self.grass_panel_controller.apply_language()
         self.freeze_note_panel_size()
 
         self.controls_title.configure(text=self.t("settings"))
@@ -1286,8 +1208,12 @@ class LineTrackerApp:
 
         if self.refresh_in_progress:
             self.loading_var.set(self.t("loading"))
+            self.loading_detail_var.set(self.t("loading_detail"))
+            self.loading_detail_label.grid()
         else:
             self.loading_var.set(" ")
+            self.loading_detail_var.set("")
+            self.loading_detail_label.grid_remove()
 
     def on_language_select(self, _: tk.Event) -> None:
         self.lang = LANG_OPTIONS.get(self.lang_var.get(), "ko")
@@ -1380,42 +1306,153 @@ class LineTrackerApp:
         self.root.option_add("*TCombobox*Listbox*Foreground", palette.text)
         self.root.option_add("*TCombobox*Listbox*selectBackground", palette.accent_dark)
         self.root.option_add("*TCombobox*Listbox*selectForeground", palette.text)
-        self.style.configure("TButton", font=FONT_BODY)
+        button_bg = blend_hex(palette.card_bg, palette.accent_light, 0.48)
+        button_bg_active = blend_hex(palette.card_bg, palette.accent_light, 0.72)
+        button_bg_pressed = blend_hex(palette.card_bg, palette.accent, 0.84)
+        button_bg_disabled = blend_hex(palette.card_bg, palette.border, 0.9)
+        button_border = blend_hex(palette.border, palette.accent_light, 0.58)
+        button_border_active = blend_hex(palette.border, palette.accent, 0.82)
+        button_border_disabled = blend_hex(palette.card_bg, palette.border, 0.98)
+        button_text = contrast_text_color(button_bg)
+        button_text_active = contrast_text_color(button_bg_active)
+        button_text_pressed = contrast_text_color(button_bg_pressed)
+        disabled_button_text = blend_hex(palette.button_disabled_text, palette.muted_text, 0.35)
+        accent_hover = blend_hex(palette.accent, palette.accent_light, 0.3)
+        accent_pressed = blend_hex(palette.accent, palette.accent_dark, 0.52)
+        accent_disabled = blend_hex(palette.card_bg, palette.border, 0.92)
+        tab_hover = blend_hex(palette.card_bg, palette.accent_light, 0.28)
+        tab_disabled = blend_hex(palette.card_bg, palette.border, 0.86)
+        self.style.configure(
+            "TButton",
+            font=FONT_BODY,
+            foreground=button_text,
+            background=button_bg,
+            bordercolor=button_border,
+            darkcolor=button_bg,
+            lightcolor=button_bg,
+            focuscolor=button_bg,
+            padding=(12, 6),
+            relief="flat",
+        )
+        self.style.map(
+            "TButton",
+            background=[
+                ("active", button_bg_active),
+                ("pressed", button_bg_pressed),
+                ("disabled", button_bg_disabled),
+            ],
+            foreground=[
+                ("active", button_text_active),
+                ("pressed", button_text_pressed),
+                ("disabled", disabled_button_text),
+            ],
+            bordercolor=[
+                ("active", button_border_active),
+                ("pressed", palette.accent_alt_dark),
+                ("disabled", button_border_disabled),
+            ],
+            lightcolor=[
+                ("active", button_bg_active),
+                ("pressed", button_bg_pressed),
+                ("disabled", button_bg_disabled),
+            ],
+            darkcolor=[
+                ("active", button_bg_active),
+                ("pressed", button_bg_pressed),
+                ("disabled", button_bg_disabled),
+            ],
+        )
         self.style.configure(
             "Accent.TButton",
             font=FONT_BODY,
             foreground=palette.button_text,
             background=palette.accent,
+            bordercolor=blend_hex(palette.accent_dark, palette.accent_light, 0.35),
+            darkcolor=palette.accent,
+            lightcolor=palette.accent,
+            focuscolor=palette.accent,
             padding=(12, 6),
         )
         self.style.map(
             "Accent.TButton",
-            background=[("active", palette.accent_dark), ("disabled", palette.accent_light)],
-            foreground=[("disabled", palette.button_disabled_text)],
+            background=[
+                ("active", accent_hover),
+                ("pressed", accent_pressed),
+                ("disabled", accent_disabled),
+            ],
+            foreground=[("disabled", disabled_button_text)],
+            bordercolor=[
+                ("active", palette.accent_light),
+                ("pressed", palette.accent_dark),
+                ("disabled", button_border_disabled),
+            ],
+            lightcolor=[
+                ("active", accent_hover),
+                ("pressed", accent_pressed),
+                ("disabled", accent_disabled),
+            ],
+            darkcolor=[
+                ("active", accent_hover),
+                ("pressed", accent_pressed),
+                ("disabled", accent_disabled),
+            ],
         )
         self.style.configure(
             "Tab.TButton",
             font=FONT_BODY,
             foreground=palette.text,
             background=palette.card_bg,
+            bordercolor=palette.border,
+            darkcolor=palette.card_bg,
+            lightcolor=palette.card_bg,
+            focuscolor=palette.card_bg,
             padding=(10, 6),
         )
         self.style.map(
             "Tab.TButton",
-            background=[("active", palette.graph_grid), ("disabled", palette.card_bg)],
-            foreground=[("disabled", palette.button_disabled_text)],
+            background=[("active", tab_hover), ("disabled", tab_disabled)],
+            foreground=[("disabled", disabled_button_text)],
+            bordercolor=[
+                ("active", blend_hex(palette.border, palette.accent_light, 0.45)),
+                ("disabled", button_border_disabled),
+            ],
+            lightcolor=[("active", tab_hover), ("disabled", tab_disabled)],
+            darkcolor=[("active", tab_hover), ("disabled", tab_disabled)],
         )
         self.style.configure(
             "TabActive.TButton",
             font=FONT_BODY,
             foreground=palette.button_text,
             background=palette.accent,
+            bordercolor=blend_hex(palette.accent_dark, palette.accent_light, 0.35),
+            darkcolor=palette.accent,
+            lightcolor=palette.accent,
+            focuscolor=palette.accent,
             padding=(10, 6),
         )
         self.style.map(
             "TabActive.TButton",
-            background=[("active", palette.accent_dark), ("disabled", palette.accent_light)],
-            foreground=[("disabled", palette.button_disabled_text)],
+            background=[
+                ("active", accent_hover),
+                ("pressed", accent_pressed),
+                ("disabled", accent_disabled),
+            ],
+            foreground=[("disabled", disabled_button_text)],
+            bordercolor=[
+                ("active", palette.accent_light),
+                ("pressed", palette.accent_dark),
+                ("disabled", button_border_disabled),
+            ],
+            lightcolor=[
+                ("active", accent_hover),
+                ("pressed", accent_pressed),
+                ("disabled", accent_disabled),
+            ],
+            darkcolor=[
+                ("active", accent_hover),
+                ("pressed", accent_pressed),
+                ("disabled", accent_disabled),
+            ],
         )
         self.style.layout(
             CARD_SCROLLBAR_STYLE,
@@ -1494,19 +1531,12 @@ class LineTrackerApp:
             self.delta_removed_label.configure(foreground=palette.danger)
         if hasattr(self, "graph_canvas"):
             self.graph_canvas.configure(bg=palette.canvas_bg, highlightbackground=palette.border)
-        if hasattr(self, "memo_text_widget"):
-            self.memo_text_widget.configure(
-                bg=palette.card_bg,
-                fg=palette.text,
-                insertbackground=palette.text,
-                highlightbackground=palette.border,
-                highlightcolor=palette.accent,
-            )
-        if hasattr(self, "memo_preview_canvas"):
-            self.memo_preview_canvas.configure(bg=palette.card_bg, highlightbackground=palette.border)
-        if hasattr(self, "grass_canvas"):
-            self.grass_canvas.configure(bg=palette.card_bg, highlightbackground=palette.border)
-            self.refresh_grass_panel()
+        memo_panel_controller = getattr(self, "memo_panel_controller", None)
+        if memo_panel_controller is not None:
+            memo_panel_controller.apply_theme()
+        grass_panel_controller = getattr(self, "grass_panel_controller", None)
+        if grass_panel_controller is not None:
+            grass_panel_controller.apply_theme()
         if hasattr(self, "memo_tab_button"):
             self.refresh_note_tab_buttons()
         graph_highlight_day = getattr(self, "graph_highlight_day", None)
@@ -1535,6 +1565,76 @@ class LineTrackerApp:
         email = match.group("email").strip() or None
         return name, email
 
+    @staticmethod
+    def _parse_email_parts(email: str | None) -> tuple[str | None, str | None]:
+        if not email:
+            return None, None
+        if "@" not in email:
+            return email.strip() or None, None
+        local_part, domain = email.rsplit("@", 1)
+        local = local_part.strip() or None
+        normalized_domain = domain.strip().casefold() or None
+        return local, normalized_domain
+
+    @staticmethod
+    def _normalize_author_handle(value: str | None) -> str | None:
+        if not value:
+            return None
+        cleaned = value.strip()
+        if not cleaned or not AUTHOR_HANDLE_RE.fullmatch(cleaned):
+            return None
+        return cleaned.casefold()
+
+    @classmethod
+    def _extract_author_merge_keys(
+        cls,
+        identity: str,
+        name: str | None,
+        email: str | None,
+    ) -> list[str]:
+        merge_keys: list[str] = []
+        if email:
+            merge_keys.append(f"email:{email.casefold()}")
+
+        normalized_name = cls._normalize_author_handle(name)
+        email_local, email_domain = cls._parse_email_parts(email)
+        normalized_local = cls._normalize_author_handle(email_local)
+
+        if normalized_name and normalized_local and normalized_name == normalized_local:
+            merge_keys.append(f"handle:{normalized_name}")
+
+        if email_domain == GITHUB_NOREPLY_DOMAIN and email_local:
+            github_handle_source = email_local.rsplit("+", 1)[-1]
+            github_handle = cls._normalize_author_handle(github_handle_source)
+            if github_handle and (normalized_name is None or normalized_name == github_handle):
+                merge_keys.append(f"handle:{github_handle}")
+
+        if not email and normalized_name:
+            merge_keys.append(f"name:{normalized_name}")
+
+        if not merge_keys:
+            merge_keys.append(f"identity:{identity.casefold()}")
+        return list(dict.fromkeys(merge_keys))
+
+    @classmethod
+    def _author_display_priority(cls, name: str | None, email: str | None) -> tuple[int, int]:
+        email_local, email_domain = cls._parse_email_parts(email)
+        normalized_name = cls._normalize_author_handle(name)
+        normalized_local = cls._normalize_author_handle(email_local)
+
+        priority = 0
+        if email:
+            priority = 3
+            if email_domain == GITHUB_NOREPLY_DOMAIN:
+                priority = 1
+            elif normalized_name and normalized_local and normalized_name == normalized_local:
+                priority = 4
+        elif normalized_name:
+            priority = 2
+
+        display_length = len((name or "") + (email or ""))
+        return priority, -display_length
+
     @classmethod
     def _build_author_option_entries(
         cls,
@@ -1545,7 +1645,9 @@ class LineTrackerApp:
         options = [auto_label, all_label]
         mapping = {auto_label: "auto", all_label: ""}
         aliases = {"auto": auto_label, "": all_label}
-        grouped: dict[str, dict[str, list[str] | str]] = {}
+
+        parsed_identities: list[dict[str, object]] = []
+        key_to_indices: dict[str, list[int]] = {}
 
         for raw_identity in identities:
             identity = raw_identity.strip()
@@ -1553,25 +1655,68 @@ class LineTrackerApp:
                 continue
 
             name, email = cls._parse_author_identity(identity)
-            canonical_source = email or name or identity
-            canonical_key = canonical_source.casefold()
-            group = grouped.get(canonical_key)
-            if group is None:
-                group = {
-                    "display": identity,
-                    "identities": [],
-                    "emails": [],
-                }
-                grouped[canonical_key] = group
+            merge_keys = cls._extract_author_merge_keys(identity, name, email)
+            item = {
+                "identity": identity,
+                "name": name,
+                "email": email,
+                "merge_keys": merge_keys,
+            }
+            index = len(parsed_identities)
+            parsed_identities.append(item)
+            for key in merge_keys:
+                key_to_indices.setdefault(key, []).append(index)
 
-            identity_values = group["identities"]
-            email_values = group["emails"]
-            if identity not in identity_values:
-                identity_values.append(identity)
-            if email and email not in email_values:
-                email_values.append(email)
+        groups: list[dict[str, object]] = []
+        visited: set[int] = set()
+        for start_index, item in enumerate(parsed_identities):
+            if start_index in visited:
+                continue
 
-        for group in grouped.values():
+            stack = [start_index]
+            component_indices: list[int] = []
+            while stack:
+                index = stack.pop()
+                if index in visited:
+                    continue
+                visited.add(index)
+                component_indices.append(index)
+                for merge_key in parsed_identities[index]["merge_keys"]:
+                    for linked_index in key_to_indices.get(str(merge_key), []):
+                        if linked_index not in visited:
+                            stack.append(linked_index)
+
+            component_indices.sort()
+            component = [parsed_identities[index] for index in component_indices]
+            display_item = component[0]
+            best_priority = cls._author_display_priority(
+                display_item.get("name"),
+                display_item.get("email"),
+            )
+            for candidate in component[1:]:
+                candidate_priority = cls._author_display_priority(
+                    candidate.get("name"),
+                    candidate.get("email"),
+                )
+                if candidate_priority > best_priority:
+                    display_item = candidate
+                    best_priority = candidate_priority
+
+            group = {
+                "display": str(display_item["identity"]),
+                "identities": [],
+                "emails": [],
+            }
+            for candidate in component:
+                identity = str(candidate["identity"])
+                email = candidate.get("email")
+                if identity not in group["identities"]:
+                    group["identities"].append(identity)
+                if email and email not in group["emails"]:
+                    group["emails"].append(email)
+            groups.append(group)
+
+        for group in groups:
             display = str(group["display"])
             if display in mapping:
                 continue
@@ -1581,10 +1726,14 @@ class LineTrackerApp:
             if not identities_for_filter:
                 continue
 
-            filter_value = "|".join(re.escape(value) for value in identities_for_filter)
+            escaped_patterns = [re.escape(value) for value in identities_for_filter]
+            filter_value = encode_author_patterns(escaped_patterns)
             mapping[display] = filter_value
             options.append(display)
             aliases[filter_value] = display
+            legacy_filter_value = "|".join(escaped_patterns)
+            if legacy_filter_value:
+                aliases[legacy_filter_value] = display
 
             for alias_source in group["identities"]:
                 aliases[re.escape(alias_source)] = display
@@ -1737,7 +1886,7 @@ class LineTrackerApp:
         return UISettings()
 
     def save_settings(self) -> None:
-        memo_text = self.get_memo_text() if hasattr(self, "memo_text_widget") else self.memo_text_value
+        memo_text = self.memo_panel_controller.get_text() if self.memo_panel_controller is not None else self.memo_text_value
         self.settings = UISettings(
             goal=self.goal,
             custom_today_enabled=self.custom_today_var.get(),
@@ -1796,6 +1945,8 @@ class LineTrackerApp:
     def set_loading_state(self, loading: bool) -> None:
         if loading:
             self.loading_var.set(self.t("loading"))
+            self.loading_detail_var.set(self.t("loading_detail"))
+            self.loading_detail_label.grid()
             self.loading_bar.grid()
             self.loading_bar.start(10)
             self.refresh_button.configure(state="disabled")
@@ -1803,6 +1954,8 @@ class LineTrackerApp:
 
         self.loading_bar.stop()
         self.loading_var.set(" ")
+        self.loading_detail_var.set("")
+        self.loading_detail_label.grid_remove()
         self.loading_bar.grid_remove()
         self.update_repo_dependent_controls()
 
@@ -1880,7 +2033,7 @@ class LineTrackerApp:
         self.refresh_in_progress = False
         self.set_loading_state(False)
         self.status_var.set(self.t("status_error"))
-        messagebox.showerror("Line Tracker Error", error_message)
+        self.show_error(error_message)
 
     def copy_output(self) -> None:
         if not self.current_output:
@@ -1958,231 +2111,8 @@ class LineTrackerApp:
         highlight_day: dt.date,
         uncommitted_today: int = 0,
     ) -> None:
-        self.grass_points = list(points)
-        self.grass_highlight_day = highlight_day
-        self.grass_uncommitted_today = max(0, int(uncommitted_today))
-        self.refresh_grass_panel()
-
-    def refresh_grass_panel(self) -> None:
-        if not hasattr(self, "grass_canvas"):
-            return
-
-        highlight_day = self.grass_highlight_day or dt.date.today()
-        uncommitted_today = self.grass_uncommitted_today if highlight_day == dt.date.today() else 0
-        values = [value for _, value in self.grass_points]
-        self.refresh_grass_legend(uncommitted_today)
-        self.draw_grass_heatmap(self.grass_points, highlight_day, uncommitted_today)
-
-        if not values:
-            self.grass_summary_var.set(self.t("grass_empty"))
-            return
-
-        active_days = sum(1 for value in values if value > 0)
-        total_lines = sum(values)
-        avg_lines = (total_lines / active_days) if active_days else 0.0
-        self.grass_summary_var.set(
-            self.t(
-                "grass_summary",
-                active=f"{active_days:,}",
-                total=f"{total_lines:,}",
-                avg=f"{avg_lines:.1f}",
-            )
-        )
-
-    def grass_fixed_level_specs(self) -> list[tuple[str, int, int | None]]:
-        palette = self.theme
-        colors = [
-            palette.accent_light,
-            palette.accent,
-            palette.accent_dark,
-            palette.accent_alt,
-        ]
-        return [
-            (colors[index], start, end)
-            for index, (start, end) in enumerate(GRASS_FIXED_LEVEL_BANDS)
-        ]
-
-    def grass_uncommitted_level_specs(self) -> list[tuple[str, int, int | None]]:
-        return [
-            (GRASS_UNCOMMITTED_LEVEL_COLORS[index], start, end)
-            for index, (start, end) in enumerate(GRASS_FIXED_LEVEL_BANDS)
-        ]
-
-    def format_grass_legend_range(self, start: int, end: int | None) -> str:
-        start_text = f"{start:,}"
-        if end is None:
-            return self.t("grass_legend_open", start=start_text)
-        end_text = f"{end:,}"
-        return self.t("grass_legend_range", start=start_text, end=end_text)
-
-    def grass_legend_items(self, uncommitted_today: int) -> list[tuple[str, str]]:
-        palette = self.theme
-        items: list[tuple[str, str]] = [(palette.graph_grid, self.t("grass_legend_zero"))]
-        for color, start, end in self.grass_fixed_level_specs():
-            label = self.format_grass_legend_range(start, end)
-            items.append((color, label))
-        if uncommitted_today > 0:
-            items.append((GRASS_UNCOMMITTED_LEVEL_COLORS[2], self.t("grass_uncommitted_legend")))
-        return items
-
-    def refresh_grass_legend(self, uncommitted_today: int) -> None:
-        if not hasattr(self, "grass_legend_frame"):
-            return
-
-        for child in self.grass_legend_frame.winfo_children():
-            child.destroy()
-
-        for column, (color, label_text) in enumerate(self.grass_legend_items(uncommitted_today)):
-            item_frame = ttk.Frame(self.grass_legend_frame, style="CardInner.TFrame")
-            item_frame.grid(row=0, column=column, sticky="w", padx=(0, GRASS_LEGEND_GAP_X))
-
-            swatch = tk.Frame(
-                item_frame,
-                width=GRASS_LEGEND_SWATCH,
-                height=GRASS_LEGEND_SWATCH,
-                bg=color,
-                highlightthickness=1,
-                highlightbackground=self.theme.border,
-            )
-            swatch.grid(row=0, column=0, sticky="w")
-            swatch.grid_propagate(False)
-
-            label = ttk.Label(item_frame, text=label_text, style="CardLabel.TLabel")
-            label.grid(row=0, column=1, sticky="w", padx=(5, 0))
-
-    @staticmethod
-    def _grass_color_for_specs(value: int, specs: list[tuple[str, int, int | None]], default_color: str) -> str:
-        if value <= 0:
-            return default_color
-        for color, start, end in specs:
-            if end is None:
-                if value >= start:
-                    return color
-                continue
-            if start <= value <= end:
-                return color
-        return specs[-1][0] if specs else default_color
-
-    def grass_level_color(self, value: int, *, uncommitted: bool = False) -> str:
-        palette = self.theme
-        specs = self.grass_uncommitted_level_specs() if uncommitted else self.grass_fixed_level_specs()
-        return self._grass_color_for_specs(value, specs, palette.graph_grid)
-
-    def draw_grass_heatmap(
-        self,
-        points: list[tuple[dt.date, int]],
-        highlight_day: dt.date,
-        uncommitted_today: int = 0,
-    ) -> None:
-        canvas = self.grass_canvas
-        palette = self.theme
-        canvas.delete("all")
-
-        width = GRASS_CANVAS_WIDTH
-        height = GRASS_CANVAS_HEIGHT
-        pitch = GRASS_CELL_SIZE + GRASS_CELL_GAP
-        band_height = (GRASS_BAND_DAY_ROWS * GRASS_CELL_SIZE) + ((GRASS_BAND_DAY_ROWS - 1) * GRASS_CELL_GAP)
-
-        if not points:
-            canvas.create_text(
-                width / 2,
-                height / 2,
-                text=self.t("grass_empty"),
-                fill=palette.muted_text,
-                font=FONT_BODY,
-            )
-            return
-
-        start_day = points[0][0]
-        end_day = points[-1][0]
-        grid_start = start_day - dt.timedelta(days=start_day.weekday())
-        grid_end = end_day + dt.timedelta(days=(6 - end_day.weekday()))
-        total_days = (grid_end - grid_start).days + 1
-        column_count = max(1, math.ceil(total_days / 7))
-        weeks_per_row = max(1, math.ceil(column_count / GRASS_SPLIT_ROWS))
-        values_by_day = {day: value for day, value in points}
-        actual_today = dt.date.today()
-        effective_uncommitted = uncommitted_today if highlight_day == actual_today else 0
-        committed_values_by_day = dict(values_by_day)
-        if effective_uncommitted > 0 and highlight_day in committed_values_by_day:
-            committed_values_by_day[highlight_day] = max(
-                0,
-                committed_values_by_day[highlight_day] - effective_uncommitted,
-            )
-
-        def band_month_y(band_index: int) -> int:
-            return GRASS_OUTER_PAD_Y + band_index * (GRASS_MONTH_LABEL_HEIGHT + band_height + GRASS_BAND_GAP)
-
-        def band_grid_y(band_index: int) -> int:
-            return band_month_y(band_index) + GRASS_MONTH_LABEL_HEIGHT
-
-        for band_index in range(GRASS_SPLIT_ROWS):
-            month_y = band_month_y(band_index)
-            grid_y = band_grid_y(band_index)
-
-            for label_text, row in (
-                (self.t("grass_day_mon"), 0),
-                (self.t("grass_day_wed"), 2),
-                (self.t("grass_day_fri"), 4),
-            ):
-                label_y = grid_y + row * pitch + GRASS_CELL_SIZE / 2
-                canvas.create_text(
-                    GRASS_OUTER_PAD_X,
-                    label_y,
-                    text=label_text,
-                    anchor="w",
-                    fill=palette.muted_text,
-                    font=("Bahnschrift", 9),
-                )
-
-            previous_month: int | None = None
-            for col_in_band in range(weeks_per_row):
-                global_col = band_index * weeks_per_row + col_in_band
-                if global_col >= column_count:
-                    break
-                visible_days = []
-                for row in range(7):
-                    cell_day = grid_start + dt.timedelta(days=global_col * 7 + row)
-                    if start_day <= cell_day <= end_day:
-                        visible_days.append(cell_day)
-                if not visible_days:
-                    continue
-                month = visible_days[0].month
-                if col_in_band == 0 or month != previous_month:
-                    canvas.create_text(
-                        GRASS_OUTER_PAD_X + GRASS_LABEL_WIDTH + col_in_band * pitch,
-                        month_y,
-                        text=self.format_month_label(month),
-                        anchor="w",
-                        fill=palette.muted_text,
-                        font=("Bahnschrift", 9),
-                    )
-                    previous_month = month
-
-        for day, value in points:
-            offset = (day - grid_start).days
-            global_col = offset // 7
-            band_index = global_col // weeks_per_row
-            col_in_band = global_col % weeks_per_row
-            row = offset % 7
-            x1 = GRASS_OUTER_PAD_X + GRASS_LABEL_WIDTH + col_in_band * pitch
-            y1 = band_grid_y(band_index) + row * pitch
-            x2 = x1 + GRASS_CELL_SIZE
-            y2 = y1 + GRASS_CELL_SIZE
-            is_today = day == highlight_day
-            committed_value = committed_values_by_day.get(day, value)
-            fill_color = self.grass_level_color(committed_value)
-            if is_today and effective_uncommitted > 0:
-                fill_color = self.grass_level_color(effective_uncommitted, uncommitted=True)
-            canvas.create_rectangle(
-                x1,
-                y1,
-                x2,
-                y2,
-                fill=fill_color,
-                outline=palette.text if is_today else "",
-                width=1 if is_today else 0,
-            )
+        if self.grass_panel_controller is not None:
+            self.grass_panel_controller.update(points, highlight_day, uncommitted_today)
 
     def draw_daily_graph(self, points: list[tuple[dt.date, int]], highlight_day: dt.date) -> None:
         canvas = self.graph_canvas
@@ -2307,181 +2237,6 @@ class LineTrackerApp:
         return default_memo_text(self.memo_labels())
 
     @staticmethod
-    def _normalize_mousewheel_delta(event: tk.Event) -> int:
-        delta = int(getattr(event, "delta", 0) or 0)
-        if delta:
-            steps = delta // 120 if abs(delta) >= 120 else (1 if delta > 0 else -1)
-            return -steps
-        button_num = int(getattr(event, "num", 0) or 0)
-        if button_num == 4:
-            return -1
-        if button_num == 5:
-            return 1
-        return 0
-
-    def _bind_vertical_mousewheel(self, widget: tk.Misc, target: tk.Misc) -> None:
-        widget.bind("<MouseWheel>", lambda event, scroll_target=target: self._on_mousewheel(event, scroll_target), add="+")
-        widget.bind("<Button-4>", lambda event, scroll_target=target: self._on_mousewheel(event, scroll_target), add="+")
-        widget.bind("<Button-5>", lambda event, scroll_target=target: self._on_mousewheel(event, scroll_target), add="+")
-
-    def _on_mousewheel(self, event: tk.Event, target: tk.Misc) -> str | None:
-        delta = self._normalize_mousewheel_delta(event)
-        if delta == 0:
-            return None
-        target.yview_scroll(delta, "units")
-        return "break"
-
-    def get_memo_text(self) -> str:
-        if hasattr(self, "memo_text_widget"):
-            self.memo_text_value = self.memo_text_widget.get("1.0", "end-1c").rstrip("\n")
-        return self.memo_text_value
-
-    def set_memo_text(self, raw_text: str, *, save: bool = False) -> None:
-        self.memo_text_value = raw_text.rstrip("\n")
-        if save and self.memo_autosave_job:
-            self.root.after_cancel(self.memo_autosave_job)
-            self.memo_autosave_job = None
-        if hasattr(self, "memo_text_widget"):
-            self.memo_widget_updating = True
-            self.memo_text_widget.delete("1.0", "end")
-            if self.memo_text_value:
-                self.memo_text_widget.insert("1.0", self.memo_text_value)
-            self.memo_text_widget.edit_modified(False)
-            self.memo_widget_updating = False
-        self.refresh_memo_preview()
-        if save:
-            self.save_settings()
-
-    def on_memo_text_modified(self, _: tk.Event | None = None) -> None:
-        if self.memo_widget_updating or not hasattr(self, "memo_text_widget"):
-            return
-        if not self.memo_text_widget.edit_modified():
-            return
-        self.memo_text_widget.edit_modified(False)
-        self.memo_text_value = self.get_memo_text()
-        self.refresh_memo_preview()
-        if self.memo_autosave_job:
-            self.root.after_cancel(self.memo_autosave_job)
-        self.memo_autosave_job = self.root.after(400, self._memo_autosave)
-
-    def on_memo_text_focus_out(self, _: tk.Event | None = None) -> None:
-        if self.memo_widget_updating:
-            return
-        self.normalize_memo_text(save=True)
-
-    def _memo_autosave(self) -> None:
-        self.memo_autosave_job = None
-        self.normalize_memo_text(save=True)
-
-    def normalize_memo_text(self, *, save: bool) -> None:
-        normalized_text = normalize_loaded_memo_text(self.get_memo_text(), self.memo_labels())
-        if normalized_text != self.memo_text_value or normalized_text != self.get_memo_text():
-            self.set_memo_text(normalized_text, save=save)
-            return
-        self.memo_text_value = normalized_text
-        if save:
-            self.save_settings()
-
-    def _on_memo_preview_configure(self, _: tk.Event) -> None:
-        if hasattr(self, "memo_preview_canvas"):
-            self.memo_preview_canvas.configure(scrollregion=self.memo_preview_canvas.bbox("all"))
-
-    def _on_memo_preview_canvas_configure(self, event: tk.Event) -> None:
-        if hasattr(self, "memo_preview_canvas") and hasattr(self, "memo_preview_window"):
-            self.memo_preview_canvas.itemconfigure(self.memo_preview_window, width=event.width)
-
-    def refresh_memo_preview(self) -> None:
-        if not hasattr(self, "memo_preview_inner"):
-            return
-
-        for child in self.memo_preview_inner.winfo_children():
-            child.destroy()
-        self.memo_preview_inner.columnconfigure(0, weight=1)
-
-        memo_state = parse_memo_text(self.get_memo_text())
-        row_index = 0
-
-        title_label = ttk.Label(self.memo_preview_inner, text=self.t("memo_title"), style="CardLabel.TLabel")
-        title_label.grid(row=row_index, column=0, sticky="w")
-        self._bind_vertical_mousewheel(title_label, self.memo_preview_canvas)
-        row_index += 1
-
-        title_value = memo_state.title if memo_state.title else self.t("memo_empty")
-        title_value_label = ttk.Label(
-            self.memo_preview_inner,
-            text=title_value,
-            style="CardTitle.TLabel",
-            wraplength=300,
-            justify="left",
-        )
-        title_value_label.grid(row=row_index, column=0, sticky="ew", pady=(4, 0))
-        self._bind_vertical_mousewheel(title_value_label, self.memo_preview_canvas)
-        row_index += 1
-
-        row_index = self._render_memo_section(self.memo_preview_inner, row_index, "done", memo_state.done_items)
-        self._render_memo_section(self.memo_preview_inner, row_index, "todo", memo_state.todo_items)
-
-    def _render_memo_section(
-        self,
-        parent: ttk.Frame,
-        row_index: int,
-        section: str,
-        items: list[str],
-    ) -> int:
-        heading = ttk.Label(parent, text=self.t(section), style="CardLabel.TLabel")
-        heading.grid(row=row_index, column=0, sticky="w", pady=(12, 0))
-        self._bind_vertical_mousewheel(heading, self.memo_preview_canvas)
-        row_index += 1
-
-        if not items:
-            empty_label = ttk.Label(parent, text=self.t("memo_empty"), style="CardLabel.TLabel")
-            empty_label.grid(row=row_index, column=0, sticky="w", pady=(4, 0))
-            self._bind_vertical_mousewheel(empty_label, self.memo_preview_canvas)
-            return row_index + 1
-
-        button_key = "move_to_todo" if section == "done" else "move_to_done"
-        for idx, item_text in enumerate(items):
-            item_row = ttk.Frame(parent, style="CardInner.TFrame")
-            item_row.grid(row=row_index, column=0, sticky="ew", pady=(4, 0))
-            item_row.columnconfigure(0, weight=1)
-            self._bind_vertical_mousewheel(item_row, self.memo_preview_canvas)
-
-            item_label = ttk.Label(
-                item_row,
-                text=f"- {item_text}",
-                style="CardTitle.TLabel",
-                wraplength=250,
-                justify="left",
-            )
-            item_label.grid(row=0, column=0, sticky="w")
-            self._bind_vertical_mousewheel(item_label, self.memo_preview_canvas)
-
-            move_button = ttk.Button(
-                item_row,
-                text=self.t(button_key),
-                command=lambda s=section, i=idx: self.move_memo_item(s, i),
-            )
-            move_button.grid(row=0, column=1, sticky="e", padx=(8, 0))
-            self._bind_vertical_mousewheel(move_button, self.memo_preview_canvas)
-            row_index += 1
-
-        return row_index
-
-    def move_memo_item(self, section: str, index: int) -> None:
-        memo_state = parse_memo_text(self.get_memo_text())
-        next_state = move_memo_item_between_sections(memo_state, section, index)
-        if next_state == memo_state:
-            return
-        self.set_memo_text(
-            build_memo_text(
-                next_state,
-                self.memo_labels(),
-                include_placeholders=True,
-            ),
-            save=True,
-        )
-
-    @staticmethod
     def _placeholder_memo_titles() -> set[str]:
         return get_placeholder_titles(
             [
@@ -2489,28 +2244,6 @@ class LineTrackerApp:
                 for lang_text in TEXT.values()
             ]
         )
-
-    def get_commit_summary_and_description(self, *, require_real_title: bool) -> tuple[str, str]:
-        memo_state = parse_memo_text(self.get_memo_text())
-        if require_real_title and (not memo_state.title or memo_state.title in self._placeholder_memo_titles()):
-            raise ValueError(self.t("error_need_title"))
-        return split_commit_message(memo_state, self.memo_labels())
-
-    def copy_commit_summary(self) -> None:
-        try:
-            summary, _ = self.get_commit_summary_and_description(require_real_title=True)
-        except ValueError as exc:
-            messagebox.showerror("Line Tracker Error", str(exc))
-            return
-        self.copy_to_clipboard(summary, "status_summary_copied")
-
-    def copy_commit_description(self) -> None:
-        try:
-            _, description = self.get_commit_summary_and_description(require_real_title=True)
-        except ValueError as exc:
-            messagebox.showerror("Line Tracker Error", str(exc))
-            return
-        self.copy_to_clipboard(description, "status_description_copied")
 
     def on_graph_days_change(self, _: tk.Event) -> None:
         self.save_settings()
@@ -2533,7 +2266,7 @@ class LineTrackerApp:
             self.save_settings()
             self.refresh()
         except ValueError as exc:
-            messagebox.showerror("Line Tracker Error", str(exc))
+            self.show_error(str(exc))
 
     def apply_goal(self) -> None:
         try:
@@ -2541,7 +2274,7 @@ class LineTrackerApp:
             self.save_settings()
             self.refresh()
         except ValueError as exc:
-            messagebox.showerror("Line Tracker Error", str(exc))
+            self.show_error(str(exc))
 
     def apply_author(self) -> None:
         raw_input = self.author_entry_var.get().strip()
@@ -2577,11 +2310,11 @@ class LineTrackerApp:
             return
         path = Path(raw_input).expanduser()
         if not path.exists():
-            messagebox.showerror("Line Tracker Error", self.t("error_repo_missing"))
+            self.show_error(self.t("error_repo_missing"))
             return
         repo = self.resolve_valid_repo(path)
         if repo is None:
-            messagebox.showerror("Line Tracker Error", self.t("error_repo_invalid"))
+            self.show_error(self.t("error_repo_invalid"))
             return
         if self.repo_selected and repo == self.repo:
             self.repo_entry_var.set(str(self.repo))

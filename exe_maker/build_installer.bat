@@ -7,13 +7,26 @@ set "BUILD_ROOT=%SCRIPT_DIR%\build"
 set "DIST_ROOT=%SCRIPT_DIR%\dist"
 set "PORTABLE_GIT_SRC=%ROOT%\vendor\PortableGit"
 set "PORTABLE_GIT_DST=%DIST_ROOT%\LineTracker\PortableGit"
+set "ICON_FILE=%ROOT%\assets\line_tracker.ico"
+set "APP_VERSION="
 set "PY_CMD="
 set "PY_ARGS="
 set "ISCC_CMD="
 
 pushd "%ROOT%" >nul
 
-echo [Line Tracker] Build Installer
+if not exist "%ROOT%\VERSION" (
+  echo VERSION file not found.
+  exit /b 1
+)
+
+set /p APP_VERSION=<"%ROOT%\VERSION"
+if not defined APP_VERSION (
+  echo VERSION file is empty.
+  exit /b 1
+)
+
+echo [Line Tracker %APP_VERSION%] Build Installer
 echo.
 
 py -3 -V >nul 2>nul
@@ -48,22 +61,45 @@ if errorlevel 1 exit /b 1
 
 echo.
 echo Building app with PyInstaller...
-%PY_CMD% %PY_ARGS% -m PyInstaller --noconfirm --clean --noconsole ^
-  --name "LineTracker" ^
-  --distpath "%DIST_ROOT%" ^
-  --workpath "%BUILD_ROOT%" ^
-  --specpath "%BUILD_ROOT%" ^
-  "%ROOT%\app\line_tracker_ui.pyw"
+if exist "%ICON_FILE%" (
+  %PY_CMD% %PY_ARGS% -m PyInstaller --noconfirm --clean --noconsole ^
+    --name "LineTracker" ^
+    --icon "%ICON_FILE%" ^
+    --add-data "%ROOT%\VERSION;." ^
+    --add-data "%ROOT%\assets;assets" ^
+    --distpath "%DIST_ROOT%" ^
+    --workpath "%BUILD_ROOT%" ^
+    --specpath "%BUILD_ROOT%" ^
+    "%ROOT%\app\line_tracker_ui.pyw"
+) else (
+  %PY_CMD% %PY_ARGS% -m PyInstaller --noconfirm --clean --noconsole ^
+    --name "LineTracker" ^
+    --add-data "%ROOT%\VERSION;." ^
+    --distpath "%DIST_ROOT%" ^
+    --workpath "%BUILD_ROOT%" ^
+    --specpath "%BUILD_ROOT%" ^
+    "%ROOT%\app\line_tracker_ui.pyw"
+)
 if errorlevel 1 exit /b 1
 
 echo.
 echo Building CLI with PyInstaller...
-%PY_CMD% %PY_ARGS% -m PyInstaller --noconfirm --clean --onefile ^
-  --name "LineTrackerCli" ^
-  --distpath "%DIST_ROOT%" ^
-  --workpath "%BUILD_ROOT%\cli" ^
-  --specpath "%BUILD_ROOT%" ^
-  "%ROOT%\app\line_tracker.py"
+if exist "%ICON_FILE%" (
+  %PY_CMD% %PY_ARGS% -m PyInstaller --noconfirm --clean --onefile ^
+    --name "LineTrackerCli" ^
+    --icon "%ICON_FILE%" ^
+    --distpath "%DIST_ROOT%" ^
+    --workpath "%BUILD_ROOT%\cli" ^
+    --specpath "%BUILD_ROOT%" ^
+    "%ROOT%\app\line_tracker.py"
+) else (
+  %PY_CMD% %PY_ARGS% -m PyInstaller --noconfirm --clean --onefile ^
+    --name "LineTrackerCli" ^
+    --distpath "%DIST_ROOT%" ^
+    --workpath "%BUILD_ROOT%\cli" ^
+    --specpath "%BUILD_ROOT%" ^
+    "%ROOT%\app\line_tracker.py"
+)
 if errorlevel 1 exit /b 1
 
 if exist "%PORTABLE_GIT_DST%" (
@@ -100,7 +136,11 @@ if not defined ISCC_CMD (
 
 echo.
 echo Building installer...
-"%ISCC_CMD%" "%SCRIPT_DIR%\LineTracker.iss"
+if exist "%ICON_FILE%" (
+  "%ISCC_CMD%" /DAppVersion=%APP_VERSION% /DAppIconPath="%ICON_FILE%" "%SCRIPT_DIR%\LineTracker.iss"
+) else (
+  "%ISCC_CMD%" /DAppVersion=%APP_VERSION% "%SCRIPT_DIR%\LineTracker.iss"
+)
 if errorlevel 1 exit /b 1
 
 if /i not "%LINE_TRACKER_SKIP_SMOKE%"=="1" (
