@@ -51,7 +51,7 @@ from line_tracker_theme import (
     resolve_theme_name,
 )
 from line_tracker_refresh import RefreshSnapshot, build_refresh_snapshot
-from line_tracker_version import format_app_title
+from line_tracker_version import APP_VERSION, format_app_title
 
 AUTO_REFRESH_MS = 60_000
 GRAPH_CANVAS_WIDTH = 420
@@ -60,6 +60,10 @@ BAR_LENGTH = 420
 GRAPH_CARD_WIDTH = GRAPH_CANVAS_WIDTH + 24
 NOTE_CARD_WIDTH = 420
 NOTE_CARD_FIT_PADDING = 8
+COMPACT_WINDOW_MIN_WIDTH = 360
+COMPACT_WINDOW_MIN_HEIGHT = 156
+COMPACT_WINDOW_MARGIN = 0
+COMPACT_WINDOW_ALPHA = 0.88
 CARD_SCROLLBAR_STYLE = "Card.Vertical.TScrollbar"
 FOOTER_LOADING_STYLE = "Loading.Horizontal.TProgressbar"
 BASE_WINDOW_WIDTH = 1440
@@ -120,7 +124,7 @@ TEXT = {
         "grass_legend_zero": "0줄",
         "grass_legend_range": "{start}~{end}줄",
         "grass_legend_open": "{start}줄+",
-        "grass_uncommitted_legend": "미커밋(같은 구간)",
+        "grass_uncommitted_legend": "오늘",
         "settings": "설정",
         "custom_date": "커스텀 날짜 사용",
         "apply_date": "날짜 적용",
@@ -137,6 +141,19 @@ TEXT = {
         "current_changes": "현재 변경",
         "refresh": "새로고침",
         "copy": "복사",
+        "compact_toggle": "축소",
+        "compact_restore": "복원",
+        "compact_title": "축소 모드",
+        "compact_today_progress": "오늘 진행",
+        "compact_progress_complete": "오늘 목표 달성",
+        "compact_progress_value_text": "{percent}% ({done}/{target})",
+        "compact_progress_remaining": "{remaining}줄 남음",
+        "compact_progress_over": "목표 초과 +{extra}줄",
+        "compact_delta": "추가줄",
+        "compact_clock": "날짜 및 시간",
+        "compact_datetime_text": "{date} | {time}",
+        "compact_refresh_short": "새로고침",
+        "compact_restore_short": "복원",
         "loading": "새로고침 중...",
         "loading_detail": "사용자 정보를 불러오는 중...",
         "status_updated": "업데이트: {time}",
@@ -214,7 +231,7 @@ TEXT = {
         "grass_legend_zero": "0 lines",
         "grass_legend_range": "{start}-{end} lines",
         "grass_legend_open": "{start}+ lines",
-        "grass_uncommitted_legend": "Uncommitted (same bands)",
+        "grass_uncommitted_legend": "Today",
         "settings": "Settings",
         "custom_date": "Use Custom Date",
         "apply_date": "Apply Date",
@@ -231,6 +248,19 @@ TEXT = {
         "current_changes": "Current Changes",
         "refresh": "Refresh",
         "copy": "Copy",
+        "compact_toggle": "Compact",
+        "compact_restore": "Restore",
+        "compact_title": "Compact Mode",
+        "compact_today_progress": "Today's Status",
+        "compact_progress_complete": "Goal complete today",
+        "compact_progress_value_text": "{percent}% ({done}/{target})",
+        "compact_progress_remaining": "{remaining} lines left",
+        "compact_progress_over": "Exceeded by +{extra} lines",
+        "compact_delta": "Delta",
+        "compact_clock": "Date & Time",
+        "compact_datetime_text": "{date} | {time}",
+        "compact_refresh_short": "Refresh",
+        "compact_restore_short": "Restore",
         "loading": "Refreshing...",
         "loading_detail": "Loading user information...",
         "status_updated": "Updated: {time}",
@@ -269,12 +299,17 @@ TEXT = {
 }
 
 FONT_TITLE = ("Bahnschrift", 18, "bold")
+FONT_VERSION = ("Bahnschrift", 9)
 FONT_SUBTITLE = ("Bahnschrift", 10)
 FONT_BODY = ("Bahnschrift", 10)
 FONT_SECTION = ("Bahnschrift", 11, "bold")
+FONT_COMPACT_VALUE = ("Bahnschrift", 14, "bold")
+FONT_COMPACT_TOOL = ("Bahnschrift", 9)
 FONT_TILE_LABEL = ("Bahnschrift", 9)
 FONT_TILE_VALUE = ("Bahnschrift", 12, "bold")
 FONT_CHIP = ("Bahnschrift", 9)
+FONT_COMPACT_META = ("Bahnschrift", 10)
+FONT_COMPACT_BAR_VALUE = ("Bahnschrift", 9, "bold")
 FONT_MONO = ("Cascadia Mono", 10)
 
 
@@ -482,6 +517,7 @@ class LineTrackerApp:
         self.root.configure(bg=self.theme.app_bg)
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
+        self.root.bind("<Configure>", self.on_root_configure)
 
         self.style = ttk.Style(self.root)
         try:
@@ -509,6 +545,7 @@ class LineTrackerApp:
             saved_auto_refresh=saved_auto_refresh,
         )
         self._build_footer(container)
+        self._build_compact_container()
         self.apply_color_palette()
         self._finish_startup(args, default_today_text)
 
@@ -536,6 +573,18 @@ class LineTrackerApp:
         self.memo_text_value = saved_memo_text
         self.memo_panel_controller: MemoPanel | None = None
         self.repo_entry_var = tk.StringVar(value=str(self.repo) if self.repo_selected else "")
+        self.compact_mode = False
+        self.compact_clock_job: str | None = None
+        self.compact_reposition_job: str | None = None
+        self.compact_placing = False
+        self.last_refresh_snapshot: RefreshSnapshot | None = None
+        self.compact_reference_day: dt.date | None = None
+        self.compact_progress_value = tk.DoubleVar(value=0.0)
+        self.compact_progress_var = tk.StringVar(value="--")
+        self.compact_added_var = tk.StringVar(value="+0")
+        self.compact_removed_var = tk.StringVar(value="-0")
+        self.compact_datetime_var = tk.StringVar(value="")
+        self.compact_status_var = tk.StringVar(value="")
 
     def _build_header(self, container: ttk.Frame) -> None:
         header_frame = ttk.Frame(container, style="App.TFrame")
@@ -543,8 +592,14 @@ class LineTrackerApp:
         header_frame.columnconfigure(2, weight=1)
         self.header_accent_bar = tk.Frame(header_frame, bg=self.theme.accent, width=6, height=34)
         self.header_accent_bar.grid(row=0, column=0, rowspan=2, sticky="ns", padx=(0, 10))
-        self.title_label = ttk.Label(header_frame, text=format_app_title(self.t("window_title")), style="Title.TLabel")
-        self.title_label.grid(row=0, column=1, sticky="w")
+        title_row = ttk.Frame(header_frame, style="App.TFrame")
+        title_row.grid(row=0, column=1, sticky="w")
+        self.title_label = ttk.Label(title_row, text=self.t("window_title"), style="Title.TLabel")
+        self.title_label.grid(row=0, column=0, sticky="w")
+        self.version_badge = ttk.Frame(title_row, style="VersionBadge.TFrame", padding=(6, 2))
+        self.version_badge.grid(row=0, column=1, sticky="sw", padx=(6, 0), pady=(3, 0))
+        self.version_label = ttk.Label(self.version_badge, text=APP_VERSION, style="Version.TLabel")
+        self.version_label.grid(row=0, column=0, sticky="w")
         self.subtitle_label = ttk.Label(
             header_frame,
             text=self.format_ref_label(),
@@ -1005,11 +1060,128 @@ class LineTrackerApp:
         self.loading_detail_label.grid(row=0, column=0, sticky="e", padx=(0, 10))
         self.loading_detail_label.grid_remove()
 
+        self.compact_button = ttk.Button(footer_right, text=self.t("compact_toggle"), command=self.enter_compact_mode)
+        self.compact_button.grid(row=0, column=1, sticky="e")
+
         self.refresh_button = ttk.Button(footer_right, text=self.t("refresh"), command=self.refresh, style="Accent.TButton")
-        self.refresh_button.grid(row=0, column=1, sticky="e")
+        self.refresh_button.grid(row=0, column=2, sticky="e", padx=(8, 0))
 
         self.copy_button = ttk.Button(footer_right, text=self.t("copy"), command=self.copy_output)
-        self.copy_button.grid(row=0, column=2, sticky="e", padx=(8, 0))
+        self.copy_button.grid(row=0, column=3, sticky="e", padx=(8, 0))
+
+    def _build_compact_container(self) -> None:
+        self.compact_container = ttk.Frame(self.root, padding=0, style="App.TFrame")
+        self.compact_container.grid(row=0, column=0, sticky="nsew")
+        self.compact_container.grid_remove()
+        self.compact_container.columnconfigure(0, weight=1)
+
+        self.compact_card = ttk.Frame(self.compact_container, style="Card.TFrame", padding=(10, 8))
+        self.compact_card.grid(row=0, column=0, sticky="nsew")
+        self.compact_card.columnconfigure(0, weight=1)
+        self.compact_card.bind("<Double-Button-1>", lambda _: self.exit_compact_mode())
+
+        compact_header = ttk.Frame(self.compact_card, style="CardInner.TFrame")
+        compact_header.grid(row=0, column=0, sticky="ew")
+        compact_header.columnconfigure(0, weight=1)
+
+        self.compact_title_label = ttk.Label(compact_header, text=self.t("window_title"), style="CompactTitle.TLabel")
+        self.compact_title_label.grid(row=0, column=0, sticky="w")
+
+        compact_actions = ttk.Frame(compact_header, style="CardInner.TFrame")
+        compact_actions.grid(row=0, column=1, sticky="e")
+
+        self.compact_refresh_button = ttk.Button(
+            compact_actions,
+            text=self.t("compact_refresh_short"),
+            command=self.refresh,
+            style="CompactTool.TButton",
+        )
+        self.compact_refresh_button.grid(row=0, column=0, sticky="e")
+
+        self.compact_restore_button = ttk.Button(
+            compact_actions,
+            text=self.t("compact_restore_short"),
+            command=self.exit_compact_mode,
+            style="CompactTool.TButton",
+        )
+        self.compact_restore_button.grid(row=0, column=1, sticky="e", padx=(6, 0))
+
+        self.compact_progress_label = ttk.Label(
+            self.compact_card,
+            text=self.t("compact_today_progress"),
+            style="CompactLabel.TLabel",
+        )
+        self.compact_progress_label.grid(row=1, column=0, sticky="w", pady=(12, 0))
+
+        compact_progress_row = ttk.Frame(self.compact_card, style="CardInner.TFrame")
+        compact_progress_row.grid(row=2, column=0, sticky="ew", pady=(4, 0))
+        compact_progress_row.columnconfigure(0, weight=1)
+
+        self.compact_progress_bar = ttk.Progressbar(
+            compact_progress_row,
+            orient="horizontal",
+            mode="determinate",
+            maximum=100.0,
+            variable=self.compact_progress_value,
+            style="Compact.Horizontal.TProgressbar",
+        )
+        self.compact_progress_bar.grid(row=0, column=0, sticky="ew")
+
+        self.compact_progress_value_label = ttk.Label(
+            compact_progress_row,
+            textvariable=self.compact_progress_var,
+            style="CompactBarValue.TLabel",
+        )
+        self.compact_progress_value_label.grid(row=0, column=1, sticky="e", padx=(8, 0))
+
+        compact_delta_row = ttk.Frame(self.compact_card, style="CardInner.TFrame")
+        compact_delta_row.grid(row=3, column=0, sticky="w", pady=(12, 0))
+
+        self.compact_delta_label = ttk.Label(
+            compact_delta_row,
+            text=self.t("compact_delta"),
+            style="CompactLabel.TLabel",
+        )
+        self.compact_delta_label.grid(row=0, column=0, sticky="w", padx=(0, 8))
+
+        compact_delta_values = ttk.Frame(compact_delta_row, style="CardInner.TFrame")
+        compact_delta_values.grid(row=0, column=1, sticky="w")
+
+        self.compact_added_box = ttk.Frame(compact_delta_values, style="DeltaBox.TFrame", padding=(8, 4))
+        self.compact_added_box.grid(row=0, column=0, sticky="w")
+
+        self.compact_added_label = ttk.Label(
+            self.compact_added_box,
+            textvariable=self.compact_added_var,
+            style="Stat.TLabel",
+        )
+        self.compact_added_label.grid(row=0, column=0, sticky="w")
+
+        self.compact_removed_box = ttk.Frame(compact_delta_values, style="DeltaBox.TFrame", padding=(8, 4))
+        self.compact_removed_box.grid(row=0, column=1, sticky="w", padx=(8, 0))
+
+        self.compact_removed_label = ttk.Label(
+            self.compact_removed_box,
+            textvariable=self.compact_removed_var,
+            style="Stat.TLabel",
+        )
+        self.compact_removed_label.grid(row=0, column=0, sticky="w")
+
+        self.compact_datetime_label = ttk.Label(
+            self.compact_card,
+            textvariable=self.compact_datetime_var,
+            style="CompactMeta.TLabel",
+        )
+        self.compact_datetime_label.grid(row=4, column=0, sticky="w", pady=(12, 0))
+
+        self.compact_status_label = ttk.Label(
+            self.compact_card,
+            textvariable=self.compact_status_var,
+            style="CompactMeta.TLabel",
+            anchor="e",
+            justify="right",
+        )
+        self.compact_status_label.place_forget()
 
     def _finish_startup(self, args: argparse.Namespace, default_today_text: str) -> None:
         self.current_output = ""
@@ -1171,7 +1343,7 @@ class LineTrackerApp:
 
     def apply_language(self) -> None:
         self.root.title(format_app_title(self.t("window_title")))
-        self.title_label.configure(text=format_app_title(self.t("window_title")))
+        self.title_label.configure(text=self.t("window_title"))
         self.lang_label.configure(text=self.t("lang_label"))
         self.theme_label.configure(text=self.t("theme_label"))
         self.repo_header_label.configure(text=self.t("repo_label"))
@@ -1201,9 +1373,16 @@ class LineTrackerApp:
         self.overall_progress_title.configure(text=self.t("overall_progress"))
         self.daily_progress_title.configure(text=self.t("daily_progress"))
         self.delta_label.configure(text=self.t("current_changes"))
+        self.compact_button.configure(text=self.t("compact_toggle"))
         self.refresh_button.configure(text=self.t("refresh"))
         self.copy_button.configure(text=self.t("copy"))
+        self.compact_title_label.configure(text=self.t("window_title"))
+        self.compact_refresh_button.configure(text=self.t("compact_refresh_short"))
+        self.compact_restore_button.configure(text=self.t("compact_restore_short"))
+        self.compact_progress_label.configure(text=self.t("compact_today_progress"))
+        self.compact_delta_label.configure(text=self.t("compact_delta"))
         self.apply_layout_for_language()
+        self.refresh_compact_display()
 
         self.rebuild_author_controls(reset_invalid_to_auto=False)
         self.refresh_note_tab_buttons()
@@ -1243,6 +1422,9 @@ class LineTrackerApp:
         for label in getattr(self, "tile_label_widgets", []):
             label.configure(wraplength=tile_wrap)
 
+        if self.compact_mode:
+            return
+
         fitted_width = self.get_fitted_window_width()
         min_height = getattr(self, "min_height", MIN_WINDOW_HEIGHT)
         self.root.minsize(fitted_width, min_height)
@@ -1268,11 +1450,58 @@ class LineTrackerApp:
         self.style.configure("Card.TFrame", background=palette.card_bg, borderwidth=1, relief="solid")
         self.style.configure("CardInner.TFrame", background=palette.card_bg, borderwidth=0, relief="flat")
         self.style.configure("DeltaBox.TFrame", background=palette.card_bg, borderwidth=1, relief="solid")
+        self.style.configure("VersionBadge.TFrame", background=palette.card_bg, borderwidth=1, relief="solid")
         self.style.configure("Title.TLabel", background=palette.app_bg, foreground=palette.text, font=FONT_TITLE)
+        self.style.configure("Version.TLabel", background=palette.card_bg, foreground=palette.muted_text, font=FONT_VERSION)
         self.style.configure("Subtitle.TLabel", background=palette.app_bg, foreground=palette.muted_text, font=FONT_SUBTITLE)
         self.style.configure("Section.TLabel", background=palette.app_bg, foreground=palette.text, font=FONT_SECTION)
         self.style.configure("CardTitle.TLabel", background=palette.card_bg, foreground=palette.text, font=FONT_BODY)
+        self.style.configure("CompactTitle.TLabel", background=palette.card_bg, foreground=palette.text, font=FONT_SECTION)
         self.style.configure("CardLabel.TLabel", background=palette.card_bg, foreground=palette.muted_text, font=FONT_BODY)
+        self.style.configure("CompactLabel.TLabel", background=palette.card_bg, foreground=palette.muted_text, font=FONT_CHIP)
+        self.style.configure("CompactValue.TLabel", background=palette.card_bg, foreground=palette.text, font=FONT_COMPACT_VALUE)
+        self.style.configure("CompactBarValue.TLabel", background=palette.card_bg, foreground=palette.text, font=FONT_COMPACT_BAR_VALUE)
+        self.style.configure("CompactMeta.TLabel", background=palette.card_bg, foreground=palette.muted_text, font=FONT_COMPACT_META)
+        self.style.configure(
+            "CompactTool.TButton",
+            font=FONT_COMPACT_TOOL,
+            foreground=palette.text,
+            background=palette.card_bg,
+            bordercolor=palette.border,
+            darkcolor=palette.card_bg,
+            lightcolor=palette.card_bg,
+            focuscolor=palette.card_bg,
+            padding=(4, 2),
+            relief="flat",
+        )
+        compact_tool_hover = blend_hex(palette.card_bg, palette.accent_light, 0.18)
+        compact_tool_pressed = blend_hex(palette.card_bg, palette.accent, 0.28)
+        self.style.map(
+            "CompactTool.TButton",
+            background=[
+                ("active", compact_tool_hover),
+                ("pressed", compact_tool_pressed),
+                ("disabled", palette.card_bg),
+            ],
+            foreground=[
+                ("disabled", blend_hex(palette.muted_text, palette.border, 0.5)),
+            ],
+            bordercolor=[
+                ("active", blend_hex(palette.border, palette.accent_light, 0.45)),
+                ("pressed", palette.accent_dark),
+                ("disabled", palette.border),
+            ],
+            lightcolor=[
+                ("active", compact_tool_hover),
+                ("pressed", compact_tool_pressed),
+                ("disabled", palette.card_bg),
+            ],
+            darkcolor=[
+                ("active", compact_tool_hover),
+                ("pressed", compact_tool_pressed),
+                ("disabled", palette.card_bg),
+            ],
+        )
         self.style.configure("Stat.TLabel", background=palette.card_bg, foreground=palette.text, font=FONT_MONO)
         self.style.configure("Muted.TLabel", background=palette.app_bg, foreground=palette.muted_text, font=FONT_BODY)
         self.style.configure("Tile.TFrame", background=palette.card_bg, borderwidth=1, relief="solid")
@@ -1512,6 +1741,15 @@ class LineTrackerApp:
             darkcolor=palette.accent_alt,
         )
         self.style.configure(
+            "Compact.Horizontal.TProgressbar",
+            troughcolor=palette.graph_grid,
+            background=palette.accent_alt,
+            lightcolor=palette.accent_alt,
+            darkcolor=palette.accent_alt,
+            bordercolor=palette.border,
+            thickness=10,
+        )
+        self.style.configure(
             FOOTER_LOADING_STYLE,
             troughcolor=palette.graph_grid,
             background=palette.accent,
@@ -1531,6 +1769,12 @@ class LineTrackerApp:
             self.delta_added_label.configure(foreground=palette.success)
         if hasattr(self, "delta_removed_label"):
             self.delta_removed_label.configure(foreground=palette.danger)
+        if hasattr(self, "compact_added_label"):
+            self.compact_added_label.configure(foreground=palette.success)
+        if hasattr(self, "compact_removed_label"):
+            self.compact_removed_label.configure(foreground=palette.danger)
+        if hasattr(self, "compact_progress_value_label"):
+            self.compact_progress_value_label.configure(foreground=palette.accent)
         if hasattr(self, "graph_canvas"):
             self.graph_canvas.configure(bg=palette.canvas_bg, highlightbackground=palette.border)
         memo_panel_controller = getattr(self, "memo_panel_controller", None)
@@ -1863,6 +2107,8 @@ class LineTrackerApp:
 
     def get_persisted_geometry(self) -> str:
         default_geometry = f"{BASE_WINDOW_WIDTH}x{BASE_WINDOW_HEIGHT}"
+        if self.compact_mode:
+            return self.last_window_geometry or default_geometry
         try:
             if self.root.state() == "iconic":
                 return self.last_window_geometry
@@ -1873,6 +2119,223 @@ class LineTrackerApp:
             self.last_window_geometry = geometry
             return geometry
         return self.last_window_geometry or default_geometry
+
+    def _set_root_attribute(self, key: str, value: object) -> None:
+        try:
+            self.root.attributes(key, value)
+        except tk.TclError:
+            pass
+
+    def _set_root_overrideredirect(self, enabled: bool) -> None:
+        try:
+            self.root.overrideredirect(enabled)
+        except tk.TclError:
+            pass
+
+    def set_compact_status(self, message: str) -> None:
+        self.compact_status_var.set(message)
+        if not hasattr(self, "compact_status_label"):
+            return
+        if message:
+            self.compact_status_label.place(relx=1.0, rely=1.0, anchor="se", x=-10, y=-8)
+        else:
+            self.compact_status_label.place_forget()
+
+    def get_compact_window_size(self) -> tuple[int, int]:
+        self.root.update_idletasks()
+        width = max(COMPACT_WINDOW_MIN_WIDTH, self.compact_container.winfo_reqwidth())
+        height = max(COMPACT_WINDOW_MIN_HEIGHT, self.compact_container.winfo_reqheight())
+        return width, height
+
+    def get_work_area(self) -> tuple[int, int, int, int]:
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                from ctypes import wintypes
+
+                class RECT(ctypes.Structure):
+                    _fields_ = [
+                        ("left", wintypes.LONG),
+                        ("top", wintypes.LONG),
+                        ("right", wintypes.LONG),
+                        ("bottom", wintypes.LONG),
+                    ]
+
+                class MONITORINFO(ctypes.Structure):
+                    _fields_ = [
+                        ("cbSize", wintypes.DWORD),
+                        ("rcMonitor", RECT),
+                        ("rcWork", RECT),
+                        ("dwFlags", wintypes.DWORD),
+                    ]
+
+                monitor = ctypes.windll.user32.MonitorFromWindow(self.root.winfo_id(), 2)
+                info = MONITORINFO()
+                info.cbSize = ctypes.sizeof(MONITORINFO)
+                if ctypes.windll.user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+                    return info.rcWork.left, info.rcWork.top, info.rcWork.right, info.rcWork.bottom
+            except Exception:
+                pass
+
+        return 0, 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+
+    def get_compact_geometry(self) -> str:
+        width, height = self.get_compact_window_size()
+        left, top, right, bottom = self.get_work_area()
+        x = max(left + COMPACT_WINDOW_MARGIN, right - width - COMPACT_WINDOW_MARGIN)
+        y = max(top + COMPACT_WINDOW_MARGIN, bottom - height - COMPACT_WINDOW_MARGIN)
+        return f"{width}x{height}+{x}+{y}"
+
+    def place_compact_window(self) -> None:
+        if not self.compact_mode:
+            return
+        self.compact_reposition_job = None
+        try:
+            self.compact_placing = True
+            width, height = self.get_compact_window_size()
+            left, top, right, bottom = self.get_work_area()
+            x = max(left + COMPACT_WINDOW_MARGIN, right - width - COMPACT_WINDOW_MARGIN)
+            y = max(top + COMPACT_WINDOW_MARGIN, bottom - height - COMPACT_WINDOW_MARGIN)
+            current_geometry = (self.root.winfo_width(), self.root.winfo_height(), self.root.winfo_x(), self.root.winfo_y())
+            target_geometry = (width, height, x, y)
+            if current_geometry == target_geometry:
+                return
+            self.root.minsize(width, height)
+            self.root.maxsize(width, height)
+            self.root.geometry(f"{width}x{height}+{x}+{y}")
+        finally:
+            self.compact_placing = False
+
+    def schedule_compact_reposition(self) -> None:
+        if not self.compact_mode or self.compact_reposition_job is not None:
+            return
+        self.compact_reposition_job = self.root.after_idle(self.place_compact_window)
+
+    def on_root_configure(self, event: tk.Event) -> None:
+        if event.widget is not self.root or not self.compact_mode or self.compact_placing:
+            return
+        self.schedule_compact_reposition()
+
+    def update_compact_datetime(self) -> None:
+        reference_day = self.compact_reference_day or (self.today_override or dt.date.today())
+        now_text = dt.datetime.now().strftime("%H:%M:%S")
+        self.compact_datetime_var.set(
+            self.t(
+                "compact_datetime_text",
+                date=reference_day.isoformat(),
+                time=now_text,
+            )
+        )
+
+    def tick_compact_clock(self) -> None:
+        self.compact_clock_job = None
+        self.update_compact_datetime()
+        if self.compact_mode:
+            self.compact_clock_job = self.root.after(1000, self.tick_compact_clock)
+
+    def schedule_compact_clock(self) -> None:
+        self.cancel_compact_clock()
+        self.tick_compact_clock()
+
+    def cancel_compact_clock(self) -> None:
+        if self.compact_clock_job is None:
+            return
+        try:
+            self.root.after_cancel(self.compact_clock_job)
+        except tk.TclError:
+            pass
+        self.compact_clock_job = None
+
+    def refresh_compact_display(self) -> None:
+        snapshot = self.last_refresh_snapshot
+        if snapshot is None:
+            self.compact_progress_value.set(0.0)
+            self.compact_progress_var.set("--")
+            self.compact_added_var.set("+0")
+            self.compact_removed_var.set("-0")
+            self.compact_reference_day = self.today_override or dt.date.today()
+            self.set_compact_status(self.t("status_repo_needed") if not self.repo_selected else "")
+            self.update_compact_datetime()
+            return
+
+        result = snapshot.result
+        today_target = snapshot.today_target
+        if today_target <= 0:
+            daily_percent = 100.0
+            compact_progress_text = self.t("compact_progress_complete")
+        else:
+            daily_percent = (snapshot.today_done / today_target) * 100.0
+            compact_progress_text = self.t(
+                "compact_progress_value_text",
+                percent=f"{daily_percent:.0f}",
+                done=f"{snapshot.today_done:,}",
+                target=f"{today_target:,}",
+            )
+        self.compact_progress_value.set(max(0.0, min(100.0, daily_percent)))
+        self.compact_progress_var.set(compact_progress_text)
+        self.compact_added_var.set(f"+{result.uncommitted_insertions:,}")
+        self.compact_removed_var.set(f"-{snapshot.uncommitted_deletions:,}")
+        self.compact_reference_day = result.today
+        self.set_compact_status("")
+        self.update_compact_datetime()
+        if self.compact_mode:
+            self.schedule_compact_reposition()
+
+    def enter_compact_mode(self) -> None:
+        if self.compact_mode:
+            return
+        self.last_window_geometry = self.get_persisted_geometry()
+        self.compact_mode = True
+        self.root.withdraw()
+        self.container.grid_remove()
+        self.compact_container.grid()
+        self.root.update_idletasks()
+        self._set_root_overrideredirect(True)
+        compact_width, compact_height = self.get_compact_window_size()
+        self.root.minsize(compact_width, compact_height)
+        self.root.maxsize(compact_width, compact_height)
+        compact_geometry = self.get_compact_geometry()
+        self.root.geometry(compact_geometry)
+        self._set_root_attribute("-topmost", True)
+        self._set_root_attribute("-alpha", COMPACT_WINDOW_ALPHA)
+        self.root.deiconify()
+        self.root.lift()
+        self.place_compact_window()
+        self.root.after(80, self.place_compact_window)
+        self.refresh_compact_display()
+        self.schedule_compact_clock()
+
+    def exit_compact_mode(self) -> None:
+        if not self.compact_mode:
+            return
+        self.compact_mode = False
+        self.cancel_compact_clock()
+        if self.compact_reposition_job is not None:
+            try:
+                self.root.after_cancel(self.compact_reposition_job)
+            except tk.TclError:
+                pass
+            self.compact_reposition_job = None
+        self.root.withdraw()
+        self.compact_container.grid_remove()
+        self.container.grid()
+        self._set_root_overrideredirect(False)
+        self._set_root_attribute("-alpha", 1.0)
+        self._set_root_attribute("-topmost", False)
+        fitted_width = self.get_fitted_window_width()
+        min_height = getattr(self, "min_height", MIN_WINDOW_HEIGHT)
+        self.root.minsize(fitted_width, min_height)
+        self.root.maxsize(fitted_width, self.root.winfo_screenheight())
+        restored_geometry = self.normalize_geometry(
+            self.last_window_geometry,
+            min_width=fitted_width,
+            width_override=fitted_width,
+        )
+        if not restored_geometry:
+            restored_geometry = f"{fitted_width}x{min_height}"
+        self.last_window_geometry = restored_geometry
+        self.root.deiconify()
+        self.root.geometry(restored_geometry)
 
     def load_settings(self) -> UISettings:
         for candidate in (self.settings_path, self.legacy_settings_path):
@@ -1943,6 +2406,7 @@ class LineTrackerApp:
         self.auto_refresh_check.configure(state=repo_state)
         refresh_state = "normal" if self.repo_selected and not self.refresh_in_progress else "disabled"
         self.refresh_button.configure(state=refresh_state)
+        self.compact_refresh_button.configure(state=refresh_state)
 
     def set_loading_state(self, loading: bool) -> None:
         if loading:
@@ -1952,6 +2416,8 @@ class LineTrackerApp:
             self.loading_bar.grid()
             self.loading_bar.start(10)
             self.refresh_button.configure(state="disabled")
+            self.compact_refresh_button.configure(state="disabled")
+            self.set_compact_status(self.t("loading"))
             return
 
         self.loading_bar.stop()
@@ -1966,6 +2432,7 @@ class LineTrackerApp:
             self.cancel_auto_refresh()
             self.refresh_ref_label()
             self.status_var.set(self.t("status_repo_needed"))
+            self.set_compact_status(self.t("status_repo_needed"))
             self.update_repo_dependent_controls()
             return
         if self.refresh_in_progress:
@@ -2007,6 +2474,7 @@ class LineTrackerApp:
 
         self.refresh_in_progress = False
         self.set_loading_state(False)
+        self.last_refresh_snapshot = snapshot
 
         result = snapshot.result
         branch_total = snapshot.branch_total
@@ -2024,7 +2492,9 @@ class LineTrackerApp:
         self.update_grass(snapshot.grass_points, result.today, uncommitted_today)
 
         status_suffix = self.t("status_auto_suffix") if self.auto_refresh_var.get() else ""
-        self.status_var.set(self.t("status_updated", time=dt.datetime.now().strftime("%H:%M:%S")) + status_suffix)
+        update_time = dt.datetime.now().strftime("%H:%M:%S")
+        self.status_var.set(self.t("status_updated", time=update_time) + status_suffix)
+        self.refresh_compact_display()
         if self.auto_refresh_var.get():
             self.schedule_auto_refresh()
 
@@ -2035,6 +2505,7 @@ class LineTrackerApp:
         self.refresh_in_progress = False
         self.set_loading_state(False)
         self.status_var.set(self.t("status_error"))
+        self.set_compact_status(self.t("status_error"))
         self.show_error(error_message)
 
     def copy_output(self) -> None:
@@ -2307,6 +2778,7 @@ class LineTrackerApp:
             self.repo_selected = False
             self.refresh_ref_label()
             self.status_var.set(self.t("status_repo_needed"))
+            self.set_compact_status(self.t("status_repo_needed"))
             self.update_repo_dependent_controls()
             self.save_settings()
             return
@@ -2336,6 +2808,7 @@ class LineTrackerApp:
             self.auto_refresh_var.set(False)
             self.cancel_auto_refresh()
             self.status_var.set(self.t("status_repo_needed"))
+            self.set_compact_status(self.t("status_repo_needed"))
             self.update_repo_dependent_controls()
             self.save_settings()
             return
@@ -2345,6 +2818,7 @@ class LineTrackerApp:
             return
         self.cancel_auto_refresh()
         self.status_var.set(self.t("status_auto_off"))
+        self.set_compact_status(self.t("status_auto_off"))
 
     def schedule_auto_refresh(self) -> None:
         self.cancel_auto_refresh()
@@ -2365,6 +2839,7 @@ class LineTrackerApp:
     def on_close(self) -> None:
         self.save_settings()
         self.cancel_auto_refresh()
+        self.cancel_compact_clock()
         self.root.destroy()
 
 

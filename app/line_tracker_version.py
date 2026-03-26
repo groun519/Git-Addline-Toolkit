@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 VERSION_PATTERN = re.compile(r"^V\d+\.\d+\.\d{3}$")
-DEFAULT_APP_VERSION = "V0.1.000"
+DEFAULT_APP_VERSION = "V0.1.001"
 APP_NAME = "Line Tracker"
 
 

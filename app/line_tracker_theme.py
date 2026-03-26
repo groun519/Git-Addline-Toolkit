@@ -26,6 +26,7 @@ class ThemePalette:
     button_disabled_text: str = "#f0f0f0"
     overall_progress_trough: str = "#27302b"
     daily_progress_trough: str = "#2b2620"
+    grass_today_uses_danger: bool = False
 
     @property
     def tile_accents(self) -> tuple[str, ...]:
@@ -90,6 +91,7 @@ THEME_PALETTES: dict[str, ThemePalette] = {
         danger="#df7a7a",
         canvas_bg="#171e29",
         graph_grid="#273244",
+        grass_today_uses_danger=True,
     ),
     "dark": ThemePalette(
         app_bg="#0d1014",
@@ -106,6 +108,7 @@ THEME_PALETTES: dict[str, ThemePalette] = {
         danger="#e07d7d",
         canvas_bg="#11161c",
         graph_grid="#24303b",
+        grass_today_uses_danger=True,
     ),
     "vs": ThemePalette(
         app_bg="#1e1e1e",
@@ -126,6 +129,7 @@ THEME_PALETTES: dict[str, ThemePalette] = {
         button_disabled_text="#c8c8c8",
         overall_progress_trough="#2b2b2c",
         daily_progress_trough="#323233",
+        grass_today_uses_danger=True,
     ),
     "neon": ThemePalette(
         app_bg="#081018",
@@ -146,6 +150,7 @@ THEME_PALETTES: dict[str, ThemePalette] = {
         button_disabled_text="#7fb6c9",
         overall_progress_trough="#15303c",
         daily_progress_trough="#2b1a3a",
+        grass_today_uses_danger=True,
     ),
     "cherry": ThemePalette(
         app_bg="#1b0f14",
@@ -186,6 +191,7 @@ THEME_PALETTES: dict[str, ThemePalette] = {
         button_disabled_text="#c6cad1",
         overall_progress_trough="#303338",
         daily_progress_trough="#34373c",
+        grass_today_uses_danger=True,
     ),
     "mc": ThemePalette(
         app_bg="#2b2418",
@@ -226,6 +232,7 @@ THEME_PALETTES: dict[str, ThemePalette] = {
         button_disabled_text="#8f84a5",
         overall_progress_trough="#20162f",
         daily_progress_trough="#2a1730",
+        grass_today_uses_danger=True,
     ),
 }
 

@@ -177,8 +177,16 @@ class GrassPanel:
             label = self._format_legend_range(start, end)
             items.append((color, label))
         if uncommitted_today > 0:
-            items.append((GRASS_UNCOMMITTED_LEVEL_COLORS[2], self.t("grass_uncommitted_legend")))
+            items.append((self._today_marker_color(), self.t("grass_uncommitted_legend")))
         return items
+
+    def _today_marker_color(self) -> str:
+        palette = self.theme()
+        return palette.danger if palette.grass_today_uses_danger else GRASS_UNCOMMITTED_LEVEL_COLORS[2]
+
+    def _today_outline_color(self) -> str:
+        palette = self.theme()
+        return palette.danger if palette.grass_today_uses_danger else palette.text
 
     def _refresh_legend(self, uncommitted_today: int) -> None:
         if not hasattr(self, "legend_frame"):
@@ -328,13 +336,17 @@ class GrassPanel:
             committed_value = committed_values_by_day.get(day, value)
             fill_color = self._level_color(committed_value)
             if is_today and effective_uncommitted > 0:
-                fill_color = self._level_color(effective_uncommitted, uncommitted=True)
+                fill_color = (
+                    self._today_marker_color()
+                    if palette.grass_today_uses_danger
+                    else self._level_color(effective_uncommitted, uncommitted=True)
+                )
             canvas.create_rectangle(
                 x1,
                 y1,
                 x2,
                 y2,
                 fill=fill_color,
-                outline=palette.text if is_today else "",
+                outline=self._today_outline_color() if is_today else "",
                 width=1 if is_today else 0,
             )
