@@ -87,6 +87,8 @@ class SettingsTests(unittest.TestCase):
                 "lang": "en",
                 "theme": "slate",
                 "goal": 123,
+                "compact_variant": "strip",
+                "compact_alpha": 0.73,
                 "note_title": "legacy title",
                 "note_done": "done line",
                 "note_todo": "todo line",
@@ -97,6 +99,8 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.lang, "en")
         self.assertEqual(settings.theme, "slate")
         self.assertEqual(settings.goal, 123)
+        self.assertEqual(settings.compact_variant, "strip")
+        self.assertEqual(settings.compact_alpha, 0.73)
         self.assertEqual(settings.legacy_note_title, "legacy title")
         self.assertEqual(settings.legacy_note_done, "done line")
         self.assertEqual(settings.legacy_note_todo, "todo line")
@@ -116,6 +120,8 @@ class SettingsTests(unittest.TestCase):
             custom_today="2026-03-12",
             auto_refresh=False,
             memo_text="Title",
+            compact_variant="strip",
+            compact_alpha=0.73,
             legacy_note_title="unused",
         )
 
@@ -130,6 +136,8 @@ class SettingsTests(unittest.TestCase):
                 "author": "me",
                 "author_display": "Auto",
                 "memo_text": "Title",
+                "compact_variant": "strip",
+                "compact_alpha": 0.73,
                 "repo_path": "C:/repo",
                 "lang": "ko",
                 "theme": "cream",

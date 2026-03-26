@@ -62,8 +62,13 @@ NOTE_CARD_WIDTH = 420
 NOTE_CARD_FIT_PADDING = 8
 COMPACT_WINDOW_MIN_WIDTH = 360
 COMPACT_WINDOW_MIN_HEIGHT = 156
+COMPACT_STRIP_MIN_WIDTH = 300
+COMPACT_STRIP_MIN_HEIGHT = 42
 COMPACT_WINDOW_MARGIN = 0
 COMPACT_WINDOW_ALPHA = 0.88
+COMPACT_WINDOW_ALPHA_MIN = 0.45
+COMPACT_WINDOW_ALPHA_MAX = 1.0
+COMPACT_LAUNCH_BUTTON_SIZE = 32
 CARD_SCROLLBAR_STYLE = "Card.Vertical.TScrollbar"
 FOOTER_LOADING_STYLE = "Loading.Horizontal.TProgressbar"
 BASE_WINDOW_WIDTH = 1440
@@ -142,11 +147,18 @@ TEXT = {
         "refresh": "새로고침",
         "copy": "복사",
         "compact_toggle": "축소",
+        "compact_toggle_short": "축소",
         "compact_restore": "복원",
         "compact_title": "축소 모드",
+        "compact_mode_to_strip": "최소화",
+        "compact_mode_to_card": "카드",
+        "compact_opacity": "투명도",
+        "compact_opacity_value": "{value}",
         "compact_today_progress": "오늘 진행",
         "compact_progress_complete": "오늘 목표 달성",
         "compact_progress_value_text": "{percent}% ({done}/{target})",
+        "compact_progress_inline_complete": "달성",
+        "compact_progress_inline_text": "{percent}% · {done}/{target}",
         "compact_progress_remaining": "{remaining}줄 남음",
         "compact_progress_over": "목표 초과 +{extra}줄",
         "compact_delta": "추가줄",
@@ -249,11 +261,18 @@ TEXT = {
         "refresh": "Refresh",
         "copy": "Copy",
         "compact_toggle": "Compact",
+        "compact_toggle_short": "Compact",
         "compact_restore": "Restore",
         "compact_title": "Compact Mode",
+        "compact_mode_to_strip": "Minimize",
+        "compact_mode_to_card": "Card",
+        "compact_opacity": "Opacity",
+        "compact_opacity_value": "{value}",
         "compact_today_progress": "Today's Status",
         "compact_progress_complete": "Goal complete today",
         "compact_progress_value_text": "{percent}% ({done}/{target})",
+        "compact_progress_inline_complete": "Done",
+        "compact_progress_inline_text": "{percent}% · {done}/{target}",
         "compact_progress_remaining": "{remaining} lines left",
         "compact_progress_over": "Exceeded by +{extra} lines",
         "compact_delta": "Delta",
@@ -305,6 +324,7 @@ FONT_BODY = ("Bahnschrift", 10)
 FONT_SECTION = ("Bahnschrift", 11, "bold")
 FONT_COMPACT_VALUE = ("Bahnschrift", 14, "bold")
 FONT_COMPACT_TOOL = ("Bahnschrift", 9)
+FONT_COMPACT_CLOCK = ("Bahnschrift", 11)
 FONT_TILE_LABEL = ("Bahnschrift", 9)
 FONT_TILE_VALUE = ("Bahnschrift", 12, "bold")
 FONT_CHIP = ("Bahnschrift", 9)
@@ -339,6 +359,8 @@ class UISettings:
     custom_today: str = ""
     auto_refresh: object = False
     memo_text: object = None
+    compact_variant: str = "card"
+    compact_alpha: float = COMPACT_WINDOW_ALPHA
     legacy_note_title: str = ""
     legacy_note_items: object = None
     legacy_note_done: str = ""
@@ -346,6 +368,14 @@ class UISettings:
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> UISettings:
+        compact_alpha_raw = data.get("compact_alpha", COMPACT_WINDOW_ALPHA)
+        try:
+            compact_alpha = float(compact_alpha_raw)
+        except (TypeError, ValueError):
+            compact_alpha = COMPACT_WINDOW_ALPHA
+        if compact_alpha > 1.0:
+            compact_alpha /= 100.0
+        compact_alpha = min(max(compact_alpha, COMPACT_WINDOW_ALPHA_MIN), COMPACT_WINDOW_ALPHA_MAX)
         return cls(
             repo_path=str(data.get("repo_path", "")).strip(),
             lang=str(data.get("lang", "ko")).strip() or "ko",
@@ -359,6 +389,8 @@ class UISettings:
             custom_today=str(data.get("custom_today", "")).strip(),
             auto_refresh=data.get("auto_refresh", False),
             memo_text=data.get("memo_text"),
+            compact_variant="strip" if str(data.get("compact_variant", "card")).strip() == "strip" else "card",
+            compact_alpha=compact_alpha,
             legacy_note_title=str(data.get("note_title", "")).strip(),
             legacy_note_items=data.get("note_items"),
             legacy_note_done=str(data.get("note_done", "")),
@@ -375,6 +407,8 @@ class UISettings:
             "author": self.author,
             "author_display": self.author_display,
             "memo_text": self.memo_text,
+            "compact_variant": self.compact_variant,
+            "compact_alpha": round(self.compact_alpha, 2),
             "repo_path": self.repo_path,
             "lang": self.lang,
             "theme": self.theme,
@@ -581,10 +615,16 @@ class LineTrackerApp:
         self.compact_reference_day: dt.date | None = None
         self.compact_progress_value = tk.DoubleVar(value=0.0)
         self.compact_progress_var = tk.StringVar(value="--")
+        self.compact_strip_summary_var = tk.StringVar(value="--")
+        self.compact_strip_progress_text = "--"
         self.compact_added_var = tk.StringVar(value="+0")
         self.compact_removed_var = tk.StringVar(value="-0")
         self.compact_datetime_var = tk.StringVar(value="")
         self.compact_status_var = tk.StringVar(value="")
+        self.compact_variant = self.settings.compact_variant if self.settings.compact_variant in {"card", "strip"} else "card"
+        self.compact_alpha = min(max(float(self.settings.compact_alpha), COMPACT_WINDOW_ALPHA_MIN), COMPACT_WINDOW_ALPHA_MAX)
+        self.compact_alpha_var = tk.DoubleVar(value=round(self.compact_alpha * 100))
+        self.compact_alpha_text_var = tk.StringVar(value="")
 
     def _build_header(self, container: ttk.Frame) -> None:
         header_frame = ttk.Frame(container, style="App.TFrame")
@@ -1060,8 +1100,25 @@ class LineTrackerApp:
         self.loading_detail_label.grid(row=0, column=0, sticky="e", padx=(0, 10))
         self.loading_detail_label.grid_remove()
 
-        self.compact_button = ttk.Button(footer_right, text=self.t("compact_toggle"), command=self.enter_compact_mode)
+        self.compact_button_visual_state = "normal"
+        self.compact_button = tk.Canvas(
+            footer_right,
+            width=COMPACT_LAUNCH_BUTTON_SIZE,
+            height=COMPACT_LAUNCH_BUTTON_SIZE,
+            highlightthickness=0,
+            bd=0,
+            relief="flat",
+            cursor="hand2",
+            takefocus=1,
+        )
         self.compact_button.grid(row=0, column=1, sticky="e")
+        self.compact_button.bind("<Enter>", lambda _: self.set_compact_launch_button_state("hover"))
+        self.compact_button.bind("<Leave>", lambda _: self.set_compact_launch_button_state("normal"))
+        self.compact_button.bind("<ButtonPress-1>", lambda _: self.set_compact_launch_button_state("pressed"))
+        self.compact_button.bind("<ButtonRelease-1>", self.on_compact_launch_button_release)
+        self.compact_button.bind("<Return>", self.on_compact_launch_button_keypress)
+        self.compact_button.bind("<space>", self.on_compact_launch_button_keypress)
+        self.redraw_compact_launch_button()
 
         self.refresh_button = ttk.Button(footer_right, text=self.t("refresh"), command=self.refresh, style="Accent.TButton")
         self.refresh_button.grid(row=0, column=2, sticky="e", padx=(8, 0))
@@ -1170,9 +1227,42 @@ class LineTrackerApp:
         self.compact_datetime_label = ttk.Label(
             self.compact_card,
             textvariable=self.compact_datetime_var,
-            style="CompactMeta.TLabel",
+            style="CompactClock.TLabel",
         )
         self.compact_datetime_label.grid(row=4, column=0, sticky="w", pady=(12, 0))
+
+        compact_footer = ttk.Frame(self.compact_card, style="CardInner.TFrame")
+        compact_footer.grid(row=5, column=0, sticky="ew", pady=(10, 0))
+        compact_footer.columnconfigure(0, weight=1)
+
+        compact_footer_actions = ttk.Frame(compact_footer, style="CardInner.TFrame")
+        compact_footer_actions.grid(row=0, column=1, sticky="e")
+
+        self.compact_opacity_scale = tk.Scale(
+            compact_footer_actions,
+            orient="horizontal",
+            from_=round(COMPACT_WINDOW_ALPHA_MIN * 100),
+            to=round(COMPACT_WINDOW_ALPHA_MAX * 100),
+            showvalue=False,
+            sliderlength=12,
+            width=6,
+            borderwidth=0,
+            highlightthickness=0,
+            relief="flat",
+            takefocus=False,
+            variable=self.compact_alpha_var,
+            command=self.on_compact_alpha_change,
+            length=68,
+        )
+        self.compact_opacity_scale.grid(row=1, column=0, sticky="e", pady=(4, 0))
+
+        self.compact_mode_button = ttk.Button(
+            compact_footer_actions,
+            text=self.t("compact_mode_to_strip"),
+            command=self.toggle_compact_variant,
+            style="CompactTool.TButton",
+        )
+        self.compact_mode_button.grid(row=0, column=0, sticky="e")
 
         self.compact_status_label = ttk.Label(
             self.compact_card,
@@ -1182,6 +1272,69 @@ class LineTrackerApp:
             justify="right",
         )
         self.compact_status_label.place_forget()
+
+        self.compact_strip = ttk.Frame(self.compact_container, style="Card.TFrame", padding=6)
+        self.compact_strip.grid(row=0, column=0, sticky="nsew")
+        self.compact_strip.grid_remove()
+        self.compact_strip.columnconfigure(2, weight=1)
+        self.compact_strip.bind("<Double-Button-1>", lambda _: self.exit_compact_mode())
+
+        self.compact_strip_opacity_scale = tk.Scale(
+            self.compact_strip,
+            orient="vertical",
+            from_=round(COMPACT_WINDOW_ALPHA_MIN * 100),
+            to=round(COMPACT_WINDOW_ALPHA_MAX * 100),
+            showvalue=False,
+            sliderlength=8,
+            width=4,
+            borderwidth=0,
+            highlightthickness=0,
+            relief="flat",
+            takefocus=False,
+            variable=self.compact_alpha_var,
+            command=self.on_compact_alpha_change,
+            length=28,
+        )
+        self.compact_strip_opacity_scale.grid(row=0, column=0, rowspan=2, sticky="nsw", padx=(0, 6))
+
+        self.compact_strip_summary_label = ttk.Label(
+            self.compact_strip,
+            textvariable=self.compact_strip_summary_var,
+            style="CompactMeta.TLabel",
+        )
+        self.compact_strip_summary_label.grid(row=0, column=1, rowspan=2, sticky="w", padx=(0, 3))
+
+        self.compact_strip_progress_canvas = tk.Canvas(
+            self.compact_strip,
+            width=112,
+            height=16,
+            highlightthickness=0,
+            bd=0,
+            relief="flat",
+        )
+        self.compact_strip_progress_canvas.grid(row=0, column=2, rowspan=2, sticky="ew", padx=(0, 3))
+        self.compact_strip_progress_canvas.bind("<Configure>", lambda _: self.redraw_compact_strip_progress())
+
+        compact_strip_actions = ttk.Frame(self.compact_strip, style="CardInner.TFrame")
+        compact_strip_actions.grid(row=0, column=3, rowspan=2, sticky="e")
+
+        self.compact_strip_mode_button = ttk.Button(
+            compact_strip_actions,
+            text=self.t("compact_mode_to_card"),
+            command=self.toggle_compact_variant,
+            style="CompactToolTiny.TButton",
+        )
+        self.compact_strip_mode_button.grid(row=0, column=0, sticky="e")
+
+        self.compact_strip_restore_button = ttk.Button(
+            compact_strip_actions,
+            text=self.t("compact_restore_short"),
+            command=self.exit_compact_mode,
+            style="CompactToolTiny.TButton",
+        )
+        self.compact_strip_restore_button.grid(row=0, column=1, sticky="e", padx=(0, 0))
+
+        self.apply_compact_variant_layout()
 
     def _finish_startup(self, args: argparse.Namespace, default_today_text: str) -> None:
         self.current_output = ""
@@ -1373,12 +1526,16 @@ class LineTrackerApp:
         self.overall_progress_title.configure(text=self.t("overall_progress"))
         self.daily_progress_title.configure(text=self.t("daily_progress"))
         self.delta_label.configure(text=self.t("current_changes"))
-        self.compact_button.configure(text=self.t("compact_toggle"))
+        self.redraw_compact_launch_button()
         self.refresh_button.configure(text=self.t("refresh"))
         self.copy_button.configure(text=self.t("copy"))
         self.compact_title_label.configure(text=self.t("window_title"))
         self.compact_refresh_button.configure(text=self.t("compact_refresh_short"))
         self.compact_restore_button.configure(text=self.t("compact_restore_short"))
+        self.compact_mode_button.configure(text=self.current_compact_mode_button_text())
+        self.compact_strip_mode_button.configure(text=self.current_compact_mode_button_text())
+        self.compact_strip_restore_button.configure(text=self.t("compact_restore_short"))
+        self.update_compact_alpha_text()
         self.compact_progress_label.configure(text=self.t("compact_today_progress"))
         self.compact_delta_label.configure(text=self.t("compact_delta"))
         self.apply_layout_for_language()
@@ -1462,6 +1619,7 @@ class LineTrackerApp:
         self.style.configure("CompactValue.TLabel", background=palette.card_bg, foreground=palette.text, font=FONT_COMPACT_VALUE)
         self.style.configure("CompactBarValue.TLabel", background=palette.card_bg, foreground=palette.text, font=FONT_COMPACT_BAR_VALUE)
         self.style.configure("CompactMeta.TLabel", background=palette.card_bg, foreground=palette.muted_text, font=FONT_COMPACT_META)
+        self.style.configure("CompactClock.TLabel", background=palette.card_bg, foreground=palette.muted_text, font=FONT_COMPACT_CLOCK)
         self.style.configure(
             "CompactTool.TButton",
             font=FONT_COMPACT_TOOL,
@@ -1478,6 +1636,82 @@ class LineTrackerApp:
         compact_tool_pressed = blend_hex(palette.card_bg, palette.accent, 0.28)
         self.style.map(
             "CompactTool.TButton",
+            background=[
+                ("active", compact_tool_hover),
+                ("pressed", compact_tool_pressed),
+                ("disabled", palette.card_bg),
+            ],
+            foreground=[
+                ("disabled", blend_hex(palette.muted_text, palette.border, 0.5)),
+            ],
+            bordercolor=[
+                ("active", blend_hex(palette.border, palette.accent_light, 0.45)),
+                ("pressed", palette.accent_dark),
+                ("disabled", palette.border),
+            ],
+            lightcolor=[
+                ("active", compact_tool_hover),
+                ("pressed", compact_tool_pressed),
+                ("disabled", palette.card_bg),
+            ],
+            darkcolor=[
+                ("active", compact_tool_hover),
+                ("pressed", compact_tool_pressed),
+                ("disabled", palette.card_bg),
+            ],
+        )
+        self.style.configure(
+            "CompactToolSmall.TButton",
+            font=("Bahnschrift", 8),
+            foreground=palette.text,
+            background=palette.card_bg,
+            bordercolor=palette.border,
+            darkcolor=palette.card_bg,
+            lightcolor=palette.card_bg,
+            focuscolor=palette.card_bg,
+            padding=(2, 1),
+            relief="flat",
+        )
+        self.style.map(
+            "CompactToolSmall.TButton",
+            background=[
+                ("active", compact_tool_hover),
+                ("pressed", compact_tool_pressed),
+                ("disabled", palette.card_bg),
+            ],
+            foreground=[
+                ("disabled", blend_hex(palette.muted_text, palette.border, 0.5)),
+            ],
+            bordercolor=[
+                ("active", blend_hex(palette.border, palette.accent_light, 0.45)),
+                ("pressed", palette.accent_dark),
+                ("disabled", palette.border),
+            ],
+            lightcolor=[
+                ("active", compact_tool_hover),
+                ("pressed", compact_tool_pressed),
+                ("disabled", palette.card_bg),
+            ],
+            darkcolor=[
+                ("active", compact_tool_hover),
+                ("pressed", compact_tool_pressed),
+                ("disabled", palette.card_bg),
+            ],
+        )
+        self.style.configure(
+            "CompactToolTiny.TButton",
+            font=("Bahnschrift", 7, "bold"),
+            foreground=palette.text,
+            background=palette.card_bg,
+            bordercolor=palette.border,
+            darkcolor=palette.card_bg,
+            lightcolor=palette.card_bg,
+            focuscolor=palette.card_bg,
+            padding=(0, 0),
+            relief="flat",
+        )
+        self.style.map(
+            "CompactToolTiny.TButton",
             background=[
                 ("active", compact_tool_hover),
                 ("pressed", compact_tool_pressed),
@@ -1775,6 +2009,26 @@ class LineTrackerApp:
             self.compact_removed_label.configure(foreground=palette.danger)
         if hasattr(self, "compact_progress_value_label"):
             self.compact_progress_value_label.configure(foreground=palette.accent)
+        if hasattr(self, "compact_opacity_scale"):
+            self.compact_opacity_scale.configure(
+                bg=palette.card_bg,
+                troughcolor=palette.graph_grid,
+                activebackground=palette.accent_light,
+                highlightbackground=palette.card_bg,
+                highlightcolor=palette.card_bg,
+            )
+        if hasattr(self, "compact_strip_opacity_scale"):
+            self.compact_strip_opacity_scale.configure(
+                bg=palette.card_bg,
+                troughcolor=palette.graph_grid,
+                activebackground=palette.accent_light,
+                highlightbackground=palette.card_bg,
+                highlightcolor=palette.card_bg,
+            )
+        if hasattr(self, "compact_strip_progress_canvas"):
+            self.redraw_compact_strip_progress()
+        if hasattr(self, "compact_button"):
+            self.redraw_compact_launch_button()
         if hasattr(self, "graph_canvas"):
             self.graph_canvas.configure(bg=palette.canvas_bg, highlightbackground=palette.border)
         memo_panel_controller = getattr(self, "memo_panel_controller", None)
@@ -2132,20 +2386,97 @@ class LineTrackerApp:
         except tk.TclError:
             pass
 
+    def update_compact_alpha_text(self) -> None:
+        alpha_percent = int(round(float(self.compact_alpha_var.get())))
+        self.compact_alpha_text_var.set(self.t("compact_opacity_value", value=f"{alpha_percent}%"))
+
+    def apply_compact_alpha(self) -> None:
+        if self.compact_mode:
+            self._set_root_attribute("-alpha", self.compact_alpha)
+
+    def on_compact_alpha_change(self, value: str) -> None:
+        try:
+            alpha_percent = float(value)
+        except (TypeError, ValueError):
+            alpha_percent = float(self.compact_alpha_var.get())
+        alpha_percent = min(max(alpha_percent, COMPACT_WINDOW_ALPHA_MIN * 100), COMPACT_WINDOW_ALPHA_MAX * 100)
+        rounded_percent = round(alpha_percent)
+        self.compact_alpha = rounded_percent / 100.0
+        if int(round(float(self.compact_alpha_var.get()))) != rounded_percent:
+            self.compact_alpha_var.set(rounded_percent)
+        self.update_compact_alpha_text()
+        self.apply_compact_alpha()
+        self.save_settings()
+
+    def current_compact_mode_button_text(self) -> str:
+        return self.t("compact_mode_to_card" if self.compact_variant == "strip" else "compact_mode_to_strip")
+
+    def apply_compact_variant_layout(self) -> None:
+        if not hasattr(self, "compact_card") or not hasattr(self, "compact_strip"):
+            return
+        if self.compact_variant == "strip":
+            self.compact_card.grid_remove()
+            self.compact_strip.grid()
+        else:
+            self.compact_strip.grid_remove()
+            self.compact_card.grid()
+        if hasattr(self, "compact_mode_button"):
+            self.compact_mode_button.configure(text=self.current_compact_mode_button_text())
+        if hasattr(self, "compact_strip_mode_button"):
+            self.compact_strip_mode_button.configure(text=self.current_compact_mode_button_text())
+
+    def toggle_compact_variant(self) -> None:
+        self.compact_variant = "card" if self.compact_variant == "strip" else "strip"
+        self.apply_compact_variant_layout()
+        self.refresh_compact_display()
+        self.save_settings()
+        if self.compact_mode:
+            self.root.update_idletasks()
+            self.place_compact_window()
+
     def set_compact_status(self, message: str) -> None:
         self.compact_status_var.set(message)
+        if self.compact_variant == "strip":
+            if message:
+                self.compact_strip_summary_var.set(message)
+            return
         if not hasattr(self, "compact_status_label"):
             return
         if message:
-            self.compact_status_label.place(relx=1.0, rely=1.0, anchor="se", x=-10, y=-8)
+            self.compact_status_label.place(relx=1.0, rely=1.0, anchor="se", x=-10, y=-34)
         else:
             self.compact_status_label.place_forget()
 
     def get_compact_window_size(self) -> tuple[int, int]:
         self.root.update_idletasks()
-        width = max(COMPACT_WINDOW_MIN_WIDTH, self.compact_container.winfo_reqwidth())
-        height = max(COMPACT_WINDOW_MIN_HEIGHT, self.compact_container.winfo_reqheight())
+        active_widget = self.compact_strip if self.compact_variant == "strip" else self.compact_card
+        min_width = COMPACT_STRIP_MIN_WIDTH if self.compact_variant == "strip" else COMPACT_WINDOW_MIN_WIDTH
+        min_height = COMPACT_STRIP_MIN_HEIGHT if self.compact_variant == "strip" else COMPACT_WINDOW_MIN_HEIGHT
+        width = max(min_width, active_widget.winfo_reqwidth())
+        height = max(min_height, active_widget.winfo_reqheight())
         return width, height
+
+    def redraw_compact_strip_progress(self) -> None:
+        if not hasattr(self, "compact_strip_progress_canvas"):
+            return
+        palette = self.theme
+        canvas = self.compact_strip_progress_canvas
+        canvas.configure(bg=palette.card_bg)
+        width = max(1, int(canvas.winfo_width() or canvas.cget("width")))
+        height = max(1, int(canvas.winfo_height() or canvas.cget("height")))
+        progress = max(0.0, min(100.0, float(self.compact_progress_value.get())))
+        fill_width = round((width - 2) * (progress / 100.0))
+        canvas.delete("all")
+        canvas.create_rectangle(1, 1, width - 1, height - 1, fill=palette.graph_grid, outline=palette.border, width=1)
+        if fill_width > 0:
+            canvas.create_rectangle(1, 1, min(width - 1, 1 + fill_width), height - 1, fill=palette.accent_alt, outline="")
+        canvas.create_text(
+            width // 2,
+            height // 2,
+            text=self.compact_strip_progress_text,
+            fill=palette.text,
+            font=("Bahnschrift", 8, "bold"),
+        )
 
     def get_work_area(self) -> tuple[int, int, int, int]:
         if sys.platform == "win32":
@@ -2251,6 +2582,9 @@ class LineTrackerApp:
         if snapshot is None:
             self.compact_progress_value.set(0.0)
             self.compact_progress_var.set("--")
+            self.compact_strip_summary_var.set(self.t("status_repo_needed") if not self.repo_selected else "")
+            self.compact_strip_progress_text = "--"
+            self.redraw_compact_strip_progress()
             self.compact_added_var.set("+0")
             self.compact_removed_var.set("-0")
             self.compact_reference_day = self.today_override or dt.date.today()
@@ -2263,6 +2597,7 @@ class LineTrackerApp:
         if today_target <= 0:
             daily_percent = 100.0
             compact_progress_text = self.t("compact_progress_complete")
+            compact_strip_text = f"{snapshot.today_done:,}/{snapshot.today_done:,} [100%]"
         else:
             daily_percent = (snapshot.today_done / today_target) * 100.0
             compact_progress_text = self.t(
@@ -2271,8 +2606,12 @@ class LineTrackerApp:
                 done=f"{snapshot.today_done:,}",
                 target=f"{today_target:,}",
             )
+            compact_strip_text = f"{snapshot.today_done:,}/{today_target:,} [{daily_percent:.0f}%]"
         self.compact_progress_value.set(max(0.0, min(100.0, daily_percent)))
         self.compact_progress_var.set(compact_progress_text)
+        self.compact_strip_summary_var.set("")
+        self.compact_strip_progress_text = compact_strip_text
+        self.redraw_compact_strip_progress()
         self.compact_added_var.set(f"+{result.uncommitted_insertions:,}")
         self.compact_removed_var.set(f"-{snapshot.uncommitted_deletions:,}")
         self.compact_reference_day = result.today
@@ -2288,6 +2627,7 @@ class LineTrackerApp:
         self.compact_mode = True
         self.root.withdraw()
         self.container.grid_remove()
+        self.apply_compact_variant_layout()
         self.compact_container.grid()
         self.root.update_idletasks()
         self._set_root_overrideredirect(True)
@@ -2297,7 +2637,8 @@ class LineTrackerApp:
         compact_geometry = self.get_compact_geometry()
         self.root.geometry(compact_geometry)
         self._set_root_attribute("-topmost", True)
-        self._set_root_attribute("-alpha", COMPACT_WINDOW_ALPHA)
+        self.update_compact_alpha_text()
+        self.apply_compact_alpha()
         self.root.deiconify()
         self.root.lift()
         self.place_compact_window()
@@ -2361,6 +2702,8 @@ class LineTrackerApp:
             author=self.author_raw,
             author_display=self.author_display,
             memo_text=memo_text,
+            compact_variant=self.compact_variant,
+            compact_alpha=self.compact_alpha,
             repo_path=str(self.repo) if self.repo_selected else "",
             lang=self.lang,
             theme=self.theme_name,
@@ -2408,6 +2751,58 @@ class LineTrackerApp:
         self.refresh_button.configure(state=refresh_state)
         self.compact_refresh_button.configure(state=refresh_state)
 
+    def redraw_compact_launch_button(self) -> None:
+        if not hasattr(self, "compact_button"):
+            return
+        palette = self.theme
+        size = COMPACT_LAUNCH_BUTTON_SIZE
+        inset = 2
+        state = getattr(self, "compact_button_visual_state", "normal")
+        fill = palette.accent
+        border = blend_hex(palette.accent_dark, palette.accent_light, 0.35)
+        if state == "hover":
+            fill = blend_hex(palette.accent, palette.accent_light, 0.3)
+            border = palette.accent_light
+        elif state == "pressed":
+            fill = blend_hex(palette.accent, palette.accent_dark, 0.52)
+            border = palette.accent_dark
+
+        self.compact_button.configure(bg=palette.app_bg, width=size, height=size)
+        self.compact_button.delete("all")
+        self.compact_button.create_rectangle(
+            inset,
+            inset,
+            size - inset,
+            size - inset,
+            fill=fill,
+            outline=border,
+            width=1,
+        )
+        self.compact_button.create_text(
+            size // 2,
+            size // 2,
+            text=self.t("compact_toggle_short"),
+            fill=palette.button_text,
+            font=("Bahnschrift", 9, "bold"),
+        )
+
+    def set_compact_launch_button_state(self, state: str) -> None:
+        self.compact_button_visual_state = state
+        self.redraw_compact_launch_button()
+
+    def on_compact_launch_button_release(self, event: tk.Event) -> str:
+        if not hasattr(self, "compact_button"):
+            return "break"
+        inside = 0 <= event.x <= COMPACT_LAUNCH_BUTTON_SIZE and 0 <= event.y <= COMPACT_LAUNCH_BUTTON_SIZE
+        self.set_compact_launch_button_state("hover" if inside else "normal")
+        if inside:
+            self.enter_compact_mode()
+        return "break"
+
+    def on_compact_launch_button_keypress(self, _: tk.Event) -> str:
+        self.enter_compact_mode()
+        return "break"
+
     def set_loading_state(self, loading: bool) -> None:
         if loading:
             self.loading_var.set(self.t("loading"))
@@ -2417,7 +2812,7 @@ class LineTrackerApp:
             self.loading_bar.start(10)
             self.refresh_button.configure(state="disabled")
             self.compact_refresh_button.configure(state="disabled")
-            self.set_compact_status(self.t("loading"))
+            self.set_compact_status("")
             return
 
         self.loading_bar.stop()
