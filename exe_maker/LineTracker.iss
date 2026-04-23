@@ -1,7 +1,7 @@
 [Setup]
 AppName=Line Tracker
 #ifndef AppVersion
-#define AppVersion "V0.1.005"
+#define AppVersion "V0.1.006"
 #endif
 AppVersion={#AppVersion}
 DefaultDirName={localappdata}\Programs\LineTracker

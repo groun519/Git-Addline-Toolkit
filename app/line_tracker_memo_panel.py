@@ -177,14 +177,14 @@ class MemoPanel:
             self.memo_text_value = self.memo_text_widget.get("1.0", "end-1c").rstrip("\n")
         return self.memo_text_value
 
-    def set_text(self, raw_text: str, *, save: bool = False) -> None:
+    def set_text(self, raw_text: str, *, save: bool = False, preserve_focus: bool = True) -> None:
         self.memo_text_value = raw_text.rstrip("\n")
         if save and self.memo_autosave_job:
             self.bindings.root.after_cancel(self.memo_autosave_job)
             self.memo_autosave_job = None
         if hasattr(self, "memo_text_widget"):
             focus_widget = self.bindings.root.focus_get()
-            had_focus = focus_widget == self.memo_text_widget
+            had_focus = preserve_focus and focus_widget == self.memo_text_widget
             insert_index = self.memo_text_widget.index("insert")
             yview = self.memo_text_widget.yview()
             self.memo_widget_updating = True
@@ -220,16 +220,16 @@ class MemoPanel:
     def on_memo_text_focus_out(self, _: tk.Event | None = None) -> None:
         if self.memo_widget_updating:
             return
-        self.normalize_text(save=True)
+        self.normalize_text(save=True, preserve_focus=False)
 
     def _memo_autosave(self) -> None:
         self.memo_autosave_job = None
-        self.normalize_text(save=True)
+        self.normalize_text(save=True, preserve_focus=True)
 
-    def normalize_text(self, *, save: bool) -> None:
+    def normalize_text(self, *, save: bool, preserve_focus: bool = True) -> None:
         normalized_text = normalize_loaded_memo_text(self.get_text(), self.labels())
         if normalized_text != self.memo_text_value or normalized_text != self.get_text():
-            self.set_text(normalized_text, save=save)
+            self.set_text(normalized_text, save=save, preserve_focus=preserve_focus)
             return
         self.memo_text_value = normalized_text
         if save:

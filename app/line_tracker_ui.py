@@ -69,6 +69,7 @@ COMPACT_WINDOW_ALPHA = 0.88
 COMPACT_WINDOW_ALPHA_MIN = 0.45
 COMPACT_WINDOW_ALPHA_MAX = 1.0
 COMPACT_LAUNCH_BUTTON_SIZE = 32
+CUSTOM_TITLEBAR_HEIGHT = 34
 CARD_SCROLLBAR_STYLE = "Card.Vertical.TScrollbar"
 FOOTER_LOADING_STYLE = "Loading.Horizontal.TProgressbar"
 BASE_WINDOW_WIDTH = 1440
@@ -491,6 +492,11 @@ class LineTrackerApp:
 
     def __init__(self, root: tk.Tk, args: argparse.Namespace) -> None:
         self.root = root
+        self.use_custom_titlebar = sys.platform == "win32"
+        self.content_row = 1 if self.use_custom_titlebar else 0
+        self.custom_titlebar_drag_x = 0
+        self.custom_titlebar_drag_y = 0
+        self.custom_titlebar_restore_pending = False
         self.settings_path = get_app_state_path(SETTINGS_FILE_NAME)
         self.legacy_settings_path = get_legacy_state_path(SETTINGS_FILE_NAME)
         self.settings = self.load_settings()
@@ -565,8 +571,15 @@ class LineTrackerApp:
                 pass
         self.root.resizable(False, False)
         self.root.configure(bg=self.theme.app_bg)
+        if self.use_custom_titlebar:
+            self.root.withdraw()
         self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
+        if self.use_custom_titlebar:
+            self.root.rowconfigure(0, weight=0)
+            self.root.rowconfigure(1, weight=1)
+            self.root.bind("<Map>", self.on_root_map, add="+")
+        else:
+            self.root.rowconfigure(0, weight=1)
         self.root.bind("<Configure>", self.on_root_configure)
 
         self.style = ttk.Style(self.root)
@@ -576,8 +589,11 @@ class LineTrackerApp:
             pass
         self.apply_color_palette()
 
+        if self.use_custom_titlebar:
+            self._build_custom_titlebar()
+
         container = ttk.Frame(self.root, padding=14, style="App.TFrame")
-        container.grid(row=0, column=0, sticky="nsew")
+        container.grid(row=self.content_row, column=0, sticky="nsew")
         container.columnconfigure(0, weight=0)
         container.columnconfigure(1, weight=0)
         container.columnconfigure(2, weight=0)
@@ -655,20 +671,72 @@ class LineTrackerApp:
         self.tile_wrap = BASE_TILE_LABEL_WRAP
         self.repo_entry_width = RESPONSIVE_REPO_ENTRY_WIDTH
 
+    def _build_custom_titlebar(self) -> None:
+        titlebar = ttk.Frame(self.root, style="TitleBar.TFrame", height=CUSTOM_TITLEBAR_HEIGHT, padding=(10, 6))
+        titlebar.grid(row=0, column=0, sticky="ew")
+        titlebar.grid_propagate(False)
+        titlebar.columnconfigure(1, weight=1)
+        self.custom_titlebar = titlebar
+
+        self.custom_titlebar_accent = tk.Frame(titlebar, bg=self.theme.accent, width=4, height=16)
+        self.custom_titlebar_accent.grid(row=0, column=0, sticky="nsw", padx=(0, 8))
+
+        titlebar_left = ttk.Frame(titlebar, style="TitleBar.TFrame")
+        titlebar_left.grid(row=0, column=1, sticky="w")
+        self.custom_titlebar_left = titlebar_left
+
+        self.custom_titlebar_title = ttk.Label(titlebar_left, text=format_app_title(self.t("window_title")), style="TitleBar.TLabel")
+        self.custom_titlebar_title.grid(row=0, column=0, sticky="w")
+
+        self.custom_titlebar_subtitle = ttk.Label(titlebar_left, text=APP_VERSION, style="TitleBarMeta.TLabel")
+        self.custom_titlebar_subtitle.grid(row=0, column=1, sticky="w", padx=(8, 0))
+
+        titlebar_actions = ttk.Frame(titlebar, style="TitleBar.TFrame")
+        titlebar_actions.grid(row=0, column=2, sticky="e")
+        self.custom_titlebar_actions = titlebar_actions
+
+        self.titlebar_minimize_button = ttk.Button(
+            titlebar_actions,
+            text="_",
+            command=self.minimize_main_window,
+            style="TitleBarButton.TButton",
+            width=3,
+        )
+        self.titlebar_minimize_button.grid(row=0, column=0, sticky="e")
+
+        self.titlebar_close_button = ttk.Button(
+            titlebar_actions,
+            text="X",
+            command=self.on_close,
+            style="TitleBarClose.TButton",
+            width=3,
+        )
+        self.titlebar_close_button.grid(row=0, column=1, sticky="e", padx=(6, 0))
+
+        for widget in (
+            titlebar,
+            titlebar_left,
+            self.custom_titlebar_title,
+            self.custom_titlebar_subtitle,
+            self.custom_titlebar_accent,
+        ):
+            self._bind_titlebar_drag(widget)
+
+    def _bind_titlebar_drag(self, widget: tk.Misc) -> None:
+        widget.bind("<ButtonPress-1>", self.on_titlebar_drag_start, add="+")
+        widget.bind("<B1-Motion>", self.on_titlebar_drag_motion, add="+")
+
     def _build_header(self, container: ttk.Frame) -> None:
         header_frame = ttk.Frame(container, style="App.TFrame")
         header_frame.grid(row=0, column=0, columnspan=4, sticky="ew", pady=(0, 10))
+        header_frame.columnconfigure(1, weight=1)
         header_frame.columnconfigure(2, weight=1)
         self.header_accent_bar = tk.Frame(header_frame, bg=self.theme.accent, width=6, height=34)
         self.header_accent_bar.grid(row=0, column=0, rowspan=2, sticky="ns", padx=(0, 10))
         title_row = ttk.Frame(header_frame, style="App.TFrame")
         title_row.grid(row=0, column=1, sticky="w")
-        self.title_label = ttk.Label(title_row, text=self.t("window_title"), style="Title.TLabel")
+        self.title_label = ttk.Label(title_row, text=self.get_header_project_title(), style="Title.TLabel")
         self.title_label.grid(row=0, column=0, sticky="w")
-        self.version_badge = ttk.Frame(title_row, style="VersionBadge.TFrame", padding=(6, 2))
-        self.version_badge.grid(row=0, column=1, sticky="sw", padx=(6, 0), pady=(3, 0))
-        self.version_label = ttk.Label(self.version_badge, text=APP_VERSION, style="Version.TLabel")
-        self.version_label.grid(row=0, column=0, sticky="w")
         self.subtitle_label = ttk.Label(
             header_frame,
             text=self.format_ref_label(),
@@ -692,9 +760,11 @@ class LineTrackerApp:
             values=list(LANG_OPTIONS.keys()),
             width=10,
             state="readonly",
+            style="Tracker.TCombobox",
         )
         self.lang_combo.grid(row=1, column=0, sticky="w")
         self.lang_combo.bind("<<ComboboxSelected>>", self.on_language_select)
+        self._bind_combobox_text_selection_clear(self.lang_combo)
 
         theme_header = ttk.Frame(right_header, style="App.TFrame")
         theme_header.grid(row=0, column=1, rowspan=2, sticky="w", padx=(0, 10))
@@ -708,9 +778,11 @@ class LineTrackerApp:
             values=self.theme_display_values(),
             width=12,
             state="readonly",
+            style="Tracker.TCombobox",
         )
         self.theme_combo.grid(row=1, column=0, sticky="w")
         self.theme_combo.bind("<<ComboboxSelected>>", self.on_theme_select)
+        self._bind_combobox_text_selection_clear(self.theme_combo)
 
         repo_header = ttk.Frame(right_header, style="App.TFrame")
         repo_header.grid(row=0, column=2, rowspan=2, sticky="e")
@@ -719,7 +791,7 @@ class LineTrackerApp:
         self.repo_header_label = ttk.Label(repo_header, text=self.t("repo_label"), style="Subtitle.TLabel")
         self.repo_header_label.grid(row=0, column=0, sticky="w", pady=(0, 2))
 
-        self.repo_entry = ttk.Entry(repo_header, textvariable=self.repo_entry_var, width=self.repo_entry_width)
+        self.repo_entry = ttk.Entry(repo_header, textvariable=self.repo_entry_var, width=self.repo_entry_width, style="Tracker.TEntry")
         self.repo_entry.grid(row=1, column=0, sticky="ew")
         self.repo_entry.bind("<Return>", self.on_repo_entry_enter)
 
@@ -1011,9 +1083,11 @@ class LineTrackerApp:
             textvariable=self.graph_days_var,
             width=6,
             state="readonly",
+            style="Tracker.TCombobox",
         )
         self.graph_days_combo.grid(row=0, column=2, sticky="e")
         self.graph_days_combo.bind("<<ComboboxSelected>>", self.on_graph_days_change)
+        self._bind_combobox_text_selection_clear(self.graph_days_combo)
 
         graph_card = ttk.Frame(graph_section, style="Card.TFrame", padding=(12, 10))
         graph_card.grid(row=1, column=0, sticky="ew")
@@ -1133,7 +1207,7 @@ class LineTrackerApp:
         controls_card.columnconfigure(0, weight=1)
         controls_card.columnconfigure(1, weight=0)
 
-        self.today_entry = ttk.Entry(controls_card, textvariable=self.today_entry_var, width=14)
+        self.today_entry = ttk.Entry(controls_card, textvariable=self.today_entry_var, width=14, style="Tracker.TEntry")
         self.today_entry.grid(row=1, column=0, sticky="ew", pady=(4, 0))
         self.today_entry.bind("<Return>", self.on_today_entry_enter)
 
@@ -1144,7 +1218,7 @@ class LineTrackerApp:
         self.goal_label = ttk.Label(controls_card, text=self.t("goal_label"), style="CardLabel.TLabel")
         self.goal_label.grid(row=2, column=0, sticky="w", pady=(10, 0))
 
-        self.goal_entry = ttk.Entry(controls_card, textvariable=self.goal_entry_var, width=14)
+        self.goal_entry = ttk.Entry(controls_card, textvariable=self.goal_entry_var, width=14, style="Tracker.TEntry")
         self.goal_entry.grid(row=3, column=0, sticky="ew", pady=(4, 0))
         self.goal_entry.bind("<Return>", self.on_goal_entry_enter)
 
@@ -1160,10 +1234,12 @@ class LineTrackerApp:
             textvariable=self.author_entry_var,
             values=self.author_options,
             width=22,
+            style="Tracker.TCombobox",
         )
         self.author_combo.grid(row=5, column=0, sticky="ew", pady=(4, 0))
         self.author_combo.bind("<Return>", self.on_author_entry_enter)
         self.author_combo.bind("<<ComboboxSelected>>", self.on_author_select)
+        self._bind_combobox_text_selection_clear(self.author_combo)
 
         self.author_apply_button = ttk.Button(controls_card, text=self.t("apply_author"), command=self.apply_author)
         self.author_apply_button.grid(row=5, column=1, sticky="e", padx=(8, 0), pady=(4, 0))
@@ -1239,7 +1315,7 @@ class LineTrackerApp:
 
     def _build_compact_container(self) -> None:
         self.compact_container = ttk.Frame(self.root, padding=0, style="App.TFrame")
-        self.compact_container.grid(row=0, column=0, sticky="nsew")
+        self.compact_container.grid(row=self.content_row, column=0, sticky="nsew")
         self.compact_container.grid_remove()
         self.compact_container.columnconfigure(0, weight=1)
 
@@ -1451,6 +1527,7 @@ class LineTrackerApp:
         self.current_output = ""
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.apply_date_controls_state()
+        self.install_background_focus_clear_bindings()
         self.update_repo_dependent_controls()
         if self.custom_today_var.get():
             try:
@@ -1462,6 +1539,8 @@ class LineTrackerApp:
         if not self.ensure_repo_ready():
             self.root.after(0, self.root.destroy)
             return
+        self.enable_main_window_chrome()
+        self.show_main_window()
         if self.repo_selected:
             self.refresh()
         else:
@@ -1495,6 +1574,11 @@ class LineTrackerApp:
             return f"{self.repo.name} • {tracked_ref} + {current}"
         return label
 
+    def get_header_project_title(self) -> str:
+        if self.repo_selected:
+            return self.repo.name
+        return self.t("window_title")
+
     def t(self, key: str, **kwargs) -> str:
         text = TEXT.get(self.lang, TEXT["ko"]).get(key, key)
         try:
@@ -1516,6 +1600,17 @@ class LineTrackerApp:
             return
         self.theme_combo.configure(values=self.theme_display_values())
         self.theme_var.set(self.theme_display_label(self.theme_name))
+
+    def _bind_combobox_text_selection_clear(self, widget: ttk.Combobox) -> None:
+        widget.bind("<<ComboboxSelected>>", lambda event, target=widget: self._clear_combobox_text_selection(target), add="+")
+        widget.bind("<FocusIn>", lambda event, target=widget: self._clear_combobox_text_selection(target), add="+")
+        widget.bind("<ButtonRelease-1>", lambda event, target=widget: self._clear_combobox_text_selection(target), add="+")
+
+    def _clear_combobox_text_selection(self, widget: ttk.Combobox) -> None:
+        try:
+            self.root.after_idle(lambda target=widget: target.selection_clear())
+        except tk.TclError:
+            return
 
     def resolve_selected_theme_name(self, selection: str) -> str:
         normalized = selection.strip()
@@ -1620,12 +1715,14 @@ class LineTrackerApp:
 
     def apply_language(self) -> None:
         self.root.title(format_app_title(self.t("window_title")))
-        self.title_label.configure(text=self.t("window_title"))
+        self.refresh_custom_titlebar()
+        self.title_label.configure(text=self.get_header_project_title())
         self.lang_label.configure(text=self.t("lang_label"))
         self.theme_label.configure(text=self.t("theme_label"))
         self.repo_header_label.configure(text=self.t("repo_label"))
         self.repo_apply_button.configure(text=self.t("repo_select"))
         self.refresh_theme_selector()
+        self.refresh_ref_label()
 
         self.graph_title.configure(text=self.t("graph_title"))
         self.graph_days_label.configure(text=self.t("graph_period"))
@@ -1678,6 +1775,65 @@ class LineTrackerApp:
             self.loading_var.set(" ")
             self.loading_detail_var.set("")
             self.loading_detail_label.grid_remove()
+
+    def refresh_custom_titlebar(self) -> None:
+        if not getattr(self, "use_custom_titlebar", False):
+            return
+        if hasattr(self, "custom_titlebar_title"):
+            self.custom_titlebar_title.configure(text=self.t("window_title"))
+        if hasattr(self, "custom_titlebar_subtitle"):
+            self.custom_titlebar_subtitle.configure(text=APP_VERSION)
+
+    def minimize_main_window(self) -> None:
+        if self.compact_mode:
+            return
+        self.save_settings()
+        self.custom_titlebar_restore_pending = True
+        if self.use_custom_titlebar and self._minimize_window_native():
+            return
+        try:
+            self.root.iconify()
+        except tk.TclError:
+            pass
+
+    def _minimize_window_native(self) -> bool:
+        if not self.use_custom_titlebar:
+            return False
+        try:
+            import ctypes
+        except Exception:
+            return False
+        try:
+            self.root.update_idletasks()
+            user32 = ctypes.windll.user32
+            hwnd = user32.GetAncestor(self.root.winfo_id(), 2)
+        except Exception:
+            return False
+        if not hwnd:
+            return False
+        try:
+            user32.ShowWindow(hwnd, 6)
+        except Exception:
+            return False
+        return True
+
+    def on_titlebar_drag_start(self, event: tk.Event) -> str | None:
+        if not self.use_custom_titlebar or self.compact_mode:
+            return None
+        self.custom_titlebar_drag_x = event.x_root - self.root.winfo_x()
+        self.custom_titlebar_drag_y = event.y_root - self.root.winfo_y()
+        return "break"
+
+    def on_titlebar_drag_motion(self, event: tk.Event) -> str | None:
+        if not self.use_custom_titlebar or self.compact_mode:
+            return None
+        target_x = event.x_root - self.custom_titlebar_drag_x
+        target_y = event.y_root - self.custom_titlebar_drag_y
+        try:
+            self.root.geometry(f"+{target_x}+{target_y}")
+        except tk.TclError:
+            return None
+        return "break"
 
     def on_language_select(self, _: tk.Event) -> None:
         self.lang = LANG_OPTIONS.get(self.lang_var.get(), "ko")
@@ -1792,7 +1948,54 @@ class LineTrackerApp:
         self._configure_widget_palette()
         self.apply_window_chrome_theme()
 
+    def enable_main_window_chrome(self) -> None:
+        if not self.use_custom_titlebar:
+            return
+        if getattr(self, "compact_mode", False):
+            return
+        if hasattr(self, "custom_titlebar"):
+            self.custom_titlebar.grid()
+        self._set_root_overrideredirect(True)
+        self.promote_appwindow_style()
+
+    def promote_appwindow_style(self) -> None:
+        if not self.use_custom_titlebar:
+            return
+        try:
+            import ctypes
+        except Exception:
+            return
+        try:
+            self.root.update_idletasks()
+        except tk.TclError:
+            return
+        try:
+            user32 = ctypes.windll.user32
+            hwnd = user32.GetAncestor(self.root.winfo_id(), 2)
+        except Exception:
+            hwnd = 0
+        if not hwnd:
+            return
+        try:
+            current_style = user32.GetWindowLongW(hwnd, -20)
+            updated_style = (current_style | 0x00040000) & ~0x00000080
+            user32.SetWindowLongW(hwnd, -20, updated_style)
+            user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0027)
+        except Exception:
+            return
+
+    def show_main_window(self) -> None:
+        try:
+            self.root.deiconify()
+            self.root.lift()
+        except tk.TclError:
+            return
+        if self.use_custom_titlebar:
+            self.root.after(20, self.promote_appwindow_style)
+
     def apply_window_chrome_theme(self) -> None:
+        if self.use_custom_titlebar:
+            return
         if sys.platform != "win32":
             return
         if getattr(self, "compact_mode", False):
@@ -1844,13 +2047,36 @@ class LineTrackerApp:
         set_dwm_attr(36, _hex_to_colorref(text_color))
         set_dwm_attr(34, _hex_to_colorref(border_color))
 
+    def on_root_map(self, event: tk.Event) -> None:
+        if event.widget is not self.root:
+            return
+        if not self.use_custom_titlebar or self.compact_mode:
+            return
+        if not self.custom_titlebar_restore_pending:
+            return
+        try:
+            if self.root.state() == "iconic":
+                return
+        except tk.TclError:
+            return
+        self.custom_titlebar_restore_pending = False
+        self.root.after(10, self.enable_main_window_chrome)
+
     def _configure_style_palette(self) -> None:
         palette = self.theme
+        titlebar_bg = blend_hex(palette.app_bg, palette.card_bg, 0.45)
+        titlebar_hover = blend_hex(titlebar_bg, palette.accent_light, 0.2)
+        titlebar_pressed = blend_hex(titlebar_bg, palette.accent, 0.28)
+        titlebar_close_hover = blend_hex(palette.danger, titlebar_bg, 0.18)
+        titlebar_close_pressed = blend_hex(palette.danger, titlebar_bg, 0.32)
         self.style.configure("App.TFrame", background=palette.app_bg)
         self.style.configure("Card.TFrame", background=palette.card_bg, borderwidth=1, relief="solid")
         self.style.configure("CardInner.TFrame", background=palette.card_bg, borderwidth=0, relief="flat")
         self.style.configure("DeltaBox.TFrame", background=palette.card_bg, borderwidth=1, relief="solid")
         self.style.configure("VersionBadge.TFrame", background=palette.card_bg, borderwidth=1, relief="solid")
+        self.style.configure("TitleBar.TFrame", background=titlebar_bg, borderwidth=0, relief="flat")
+        self.style.configure("TitleBar.TLabel", background=titlebar_bg, foreground=palette.text, font=("Bahnschrift", 10, "bold"))
+        self.style.configure("TitleBarMeta.TLabel", background=titlebar_bg, foreground=palette.muted_text, font=("Bahnschrift", 9))
         self.style.configure("Title.TLabel", background=palette.app_bg, foreground=palette.text, font=FONT_TITLE)
         self.style.configure("Version.TLabel", background=palette.card_bg, foreground=palette.muted_text, font=FONT_VERSION)
         self.style.configure("Subtitle.TLabel", background=palette.app_bg, foreground=palette.muted_text, font=FONT_SUBTITLE)
@@ -1865,6 +2091,76 @@ class LineTrackerApp:
         self.style.configure("CompactBarValue.TLabel", background=palette.card_bg, foreground=palette.text, font=FONT_COMPACT_BAR_VALUE)
         self.style.configure("CompactMeta.TLabel", background=palette.card_bg, foreground=palette.muted_text, font=FONT_COMPACT_META)
         self.style.configure("CompactClock.TLabel", background=palette.card_bg, foreground=palette.muted_text, font=FONT_COMPACT_CLOCK)
+        self.style.configure(
+            "TitleBarButton.TButton",
+            font=("Bahnschrift", 9, "bold"),
+            foreground=palette.text,
+            background=titlebar_bg,
+            bordercolor=blend_hex(palette.border, palette.card_bg, 0.35),
+            darkcolor=titlebar_bg,
+            lightcolor=titlebar_bg,
+            focuscolor=titlebar_bg,
+            padding=(6, 1),
+            relief="flat",
+        )
+        self.style.map(
+            "TitleBarButton.TButton",
+            background=[
+                ("active", titlebar_hover),
+                ("pressed", titlebar_pressed),
+            ],
+            bordercolor=[
+                ("active", blend_hex(palette.border, palette.accent_light, 0.5)),
+                ("pressed", palette.accent_dark),
+            ],
+            foreground=[
+                ("active", palette.text),
+                ("pressed", palette.text),
+            ],
+            lightcolor=[
+                ("active", titlebar_hover),
+                ("pressed", titlebar_pressed),
+            ],
+            darkcolor=[
+                ("active", titlebar_hover),
+                ("pressed", titlebar_pressed),
+            ],
+        )
+        self.style.configure(
+            "TitleBarClose.TButton",
+            font=("Bahnschrift", 9, "bold"),
+            foreground=palette.text,
+            background=titlebar_bg,
+            bordercolor=blend_hex(palette.border, palette.danger, 0.28),
+            darkcolor=titlebar_bg,
+            lightcolor=titlebar_bg,
+            focuscolor=titlebar_bg,
+            padding=(6, 1),
+            relief="flat",
+        )
+        self.style.map(
+            "TitleBarClose.TButton",
+            background=[
+                ("active", titlebar_close_hover),
+                ("pressed", titlebar_close_pressed),
+            ],
+            bordercolor=[
+                ("active", blend_hex(palette.border, palette.danger, 0.65)),
+                ("pressed", palette.danger),
+            ],
+            foreground=[
+                ("active", palette.text),
+                ("pressed", palette.text),
+            ],
+            lightcolor=[
+                ("active", titlebar_close_hover),
+                ("pressed", titlebar_close_pressed),
+            ],
+            darkcolor=[
+                ("active", titlebar_close_hover),
+                ("pressed", titlebar_close_pressed),
+            ],
+        )
         self.style.configure(
             "CompactTool.TButton",
             font=FONT_COMPACT_TOOL,
@@ -1996,26 +2292,115 @@ class LineTrackerApp:
         self.style.configure("ChipValue.TLabel", background=palette.card_bg, foreground=palette.text, font=FONT_CHIP)
         self.style.configure("TCheckbutton", background=palette.card_bg, foreground=palette.text, font=FONT_BODY)
         self.style.map("TCheckbutton", background=[("active", palette.card_bg)])
-        self.style.configure("TEntry", fieldbackground=palette.card_bg, foreground=palette.text, font=FONT_BODY)
+        entry_bg = blend_hex(palette.card_bg, palette.app_bg, 0.18)
+        entry_focus_bg = blend_hex(palette.card_bg, palette.accent_light, 0.1)
+        entry_border = blend_hex(palette.border, palette.accent_light, 0.32)
+        entry_border_focus = blend_hex(palette.border, palette.accent_light, 0.62)
         self.style.configure(
-            "TCombobox",
-            fieldbackground=palette.card_bg,
-            background=palette.card_bg,
+            "Tracker.TEntry",
+            fieldbackground=entry_bg,
             foreground=palette.text,
-            arrowcolor=palette.text,
+            bordercolor=entry_border,
+            darkcolor=entry_bg,
+            lightcolor=entry_bg,
+            insertcolor=palette.text,
+            padding=(6, 4),
+            relief="flat",
             font=FONT_BODY,
         )
         self.style.map(
-            "TCombobox",
-            fieldbackground=[("readonly", palette.card_bg)],
-            background=[("readonly", palette.card_bg)],
-            foreground=[("readonly", palette.text)],
-            arrowcolor=[("readonly", palette.text)],
+            "Tracker.TEntry",
+            fieldbackground=[
+                ("focus", entry_focus_bg),
+                ("disabled", blend_hex(entry_bg, palette.border, 0.55)),
+            ],
+            foreground=[
+                ("disabled", blend_hex(palette.muted_text, palette.border, 0.35)),
+            ],
+            bordercolor=[
+                ("focus", entry_border_focus),
+                ("disabled", blend_hex(entry_border, palette.border, 0.4)),
+            ],
+            lightcolor=[
+                ("focus", entry_focus_bg),
+                ("disabled", blend_hex(entry_bg, palette.border, 0.55)),
+            ],
+            darkcolor=[
+                ("focus", entry_focus_bg),
+                ("disabled", blend_hex(entry_bg, palette.border, 0.55)),
+            ],
+        )
+        self.style.configure("TEntry", fieldbackground=entry_bg, foreground=palette.text, font=FONT_BODY)
+        combo_bg = blend_hex(palette.card_bg, palette.app_bg, 0.18)
+        combo_hover = blend_hex(palette.card_bg, palette.accent_light, 0.12)
+        combo_focus = blend_hex(palette.card_bg, palette.accent_light, 0.2)
+        combo_border = blend_hex(palette.border, palette.accent_light, 0.32)
+        combo_border_focus = blend_hex(palette.border, palette.accent_light, 0.62)
+        combo_arrow = blend_hex(palette.text, palette.accent_light, 0.15)
+        self.style.configure(
+            "Tracker.TCombobox",
+            fieldbackground=combo_bg,
+            background=combo_bg,
+            foreground=palette.text,
+            arrowcolor=combo_arrow,
+            bordercolor=combo_border,
+            darkcolor=combo_bg,
+            lightcolor=combo_bg,
+            insertcolor=palette.text,
+            padding=(6, 4, 4, 4),
+            relief="flat",
+            font=FONT_BODY,
+        )
+        self.style.map(
+            "Tracker.TCombobox",
+            fieldbackground=[
+                ("readonly", combo_bg),
+                ("focus", combo_focus),
+                ("active", combo_hover),
+                ("disabled", blend_hex(combo_bg, palette.border, 0.55)),
+            ],
+            background=[
+                ("readonly", combo_bg),
+                ("focus", combo_focus),
+                ("active", combo_hover),
+                ("disabled", blend_hex(combo_bg, palette.border, 0.55)),
+            ],
+            foreground=[
+                ("disabled", blend_hex(palette.muted_text, palette.border, 0.35)),
+                ("readonly", palette.text),
+            ],
+            arrowcolor=[
+                ("active", palette.accent_light),
+                ("focus", palette.accent_light),
+                ("disabled", blend_hex(palette.muted_text, palette.border, 0.35)),
+                ("readonly", combo_arrow),
+            ],
+            bordercolor=[
+                ("focus", combo_border_focus),
+                ("active", combo_border_focus),
+                ("readonly", combo_border),
+                ("disabled", blend_hex(combo_border, palette.border, 0.4)),
+            ],
+            lightcolor=[
+                ("focus", combo_focus),
+                ("active", combo_hover),
+                ("readonly", combo_bg),
+                ("disabled", blend_hex(combo_bg, palette.border, 0.55)),
+            ],
+            darkcolor=[
+                ("focus", combo_focus),
+                ("active", combo_hover),
+                ("readonly", combo_bg),
+                ("disabled", blend_hex(combo_bg, palette.border, 0.55)),
+            ],
         )
         self.root.option_add("*TCombobox*Listbox*Background", palette.card_bg)
         self.root.option_add("*TCombobox*Listbox*Foreground", palette.text)
         self.root.option_add("*TCombobox*Listbox*selectBackground", palette.accent_dark)
         self.root.option_add("*TCombobox*Listbox*selectForeground", palette.text)
+        self.root.option_add("*TCombobox*Listbox*BorderWidth", 0)
+        self.root.option_add("*TCombobox*Listbox*HighlightThickness", 0)
+        self.root.option_add("*TCombobox*Listbox*Font", "Bahnschrift 10")
         button_bg = blend_hex(palette.card_bg, palette.accent_light, 0.48)
         button_bg_active = blend_hex(palette.card_bg, palette.accent_light, 0.72)
         button_bg_pressed = blend_hex(palette.card_bg, palette.accent, 0.84)
@@ -2240,6 +2625,8 @@ class LineTrackerApp:
 
     def _configure_widget_palette(self) -> None:
         palette = self.theme
+        if hasattr(self, "custom_titlebar_accent"):
+            self.custom_titlebar_accent.configure(bg=palette.accent)
         if hasattr(self, "header_accent_bar"):
             self.header_accent_bar.configure(bg=palette.accent)
         for idx, widget in enumerate(getattr(self, "tile_accent_widgets", [])):
@@ -2538,6 +2925,7 @@ class LineTrackerApp:
             self.author_entry_var.set(self.author_display)
 
     def refresh_ref_label(self) -> None:
+        self.title_label.configure(text=self.get_header_project_title())
         self.subtitle_label.configure(text=self.format_ref_label())
 
     @staticmethod
@@ -2867,6 +3255,8 @@ class LineTrackerApp:
         self.last_window_geometry = self.get_persisted_geometry()
         self.compact_mode = True
         self.root.withdraw()
+        if self.use_custom_titlebar and hasattr(self, "custom_titlebar"):
+            self.custom_titlebar.grid_remove()
         self.container.grid_remove()
         self.apply_compact_variant_layout()
         self.compact_container.grid()
@@ -2900,8 +3290,13 @@ class LineTrackerApp:
             self.compact_reposition_job = None
         self.root.withdraw()
         self.compact_container.grid_remove()
+        if self.use_custom_titlebar and hasattr(self, "custom_titlebar"):
+            self.custom_titlebar.grid()
         self.container.grid()
-        self._set_root_overrideredirect(False)
+        if self.use_custom_titlebar:
+            self._set_root_overrideredirect(True)
+        else:
+            self._set_root_overrideredirect(False)
         self._set_root_attribute("-alpha", 1.0)
         self._set_root_attribute("-topmost", False)
         fitted_width = self.get_fitted_window_width()
@@ -2918,7 +3313,10 @@ class LineTrackerApp:
         self.last_window_geometry = restored_geometry
         self.root.deiconify()
         self.root.geometry(restored_geometry)
-        self.apply_window_chrome_theme()
+        if self.use_custom_titlebar:
+            self.enable_main_window_chrome()
+        else:
+            self.apply_window_chrome_theme()
 
     def load_settings(self) -> UISettings:
         for candidate in (self.settings_path, self.legacy_settings_path):
@@ -3104,6 +3502,31 @@ class LineTrackerApp:
             self.root.after(0, callback)
         except tk.TclError:
             pass
+
+    def install_background_focus_clear_bindings(self) -> None:
+        roots: list[tk.Misc] = [self.root]
+        for attr_name in ("container", "compact_container"):
+            widget = getattr(self, attr_name, None)
+            if widget is not None:
+                roots.append(widget)
+        for root_widget in roots:
+            self._bind_background_focus_clear(root_widget)
+
+    def _bind_background_focus_clear(self, widget: tk.Misc) -> None:
+        if isinstance(widget, (tk.Frame, ttk.Frame, tk.Label, ttk.Label, tk.Canvas)):
+            widget.bind("<Button-1>", self.on_background_click_clear_focus, add="+")
+        for child in widget.winfo_children():
+            self._bind_background_focus_clear(child)
+
+    def on_background_click_clear_focus(self, event: tk.Event) -> None:
+        widget = event.widget
+        widget_class = widget.winfo_class()
+        if widget_class in {"Entry", "TEntry", "Text", "TCombobox", "Combobox", "Listbox", "Menu", "Scale"}:
+            return
+        try:
+            self.root.after_idle(self.root.focus_set)
+        except tk.TclError:
+            return
 
     def _on_refresh_success(self, request_id: int, snapshot: RefreshSnapshot) -> None:
         if request_id != self.refresh_request_id:
