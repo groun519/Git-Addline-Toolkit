@@ -8,9 +8,11 @@ from line_tracker import (
     TrackerConfig,
     TrackerResult,
     compute_metrics,
+    get_committed_deletions,
     get_committed_insertions,
     get_committed_insertions_by_date_combined,
     get_committed_insertions_for_date_combined,
+    get_total_deletions_up_to,
     get_total_insertions_up_to,
     get_uncommitted_deletions,
     resolve_base_commit,
@@ -30,6 +32,8 @@ class RefreshSnapshot:
     graph_avg: float
     graph_max: int
     branch_total: int
+    branch_deletions: int
+    overall_deletions: int
     share_text: str
     uncommitted_deletions: int
 
@@ -42,6 +46,12 @@ def _compute_branch_total(repo: Path, author: str, tracked_ref: str, current_ref
     if current_ref == tracked_ref:
         return 0
     return get_committed_insertions(repo, tracked_ref, author, current_ref)
+
+
+def _compute_branch_deletions(repo: Path, author: str, tracked_ref: str, current_ref: str) -> int:
+    if current_ref == tracked_ref:
+        return 0
+    return get_committed_deletions(repo, tracked_ref, author, current_ref)
 
 
 def _compute_all_committed_total(
@@ -57,6 +67,22 @@ def _compute_all_committed_total(
     if config.include_local and current_ref != tracked_ref:
         all_committed += get_committed_insertions(repo, tracked_ref, "", current_ref)
     return all_base_total + all_committed
+
+
+def _compute_overall_committed_deletions(
+    repo: Path,
+    result: TrackerResult,
+    config: TrackerConfig,
+    author: str,
+    tracked_ref: str,
+    current_ref: str,
+) -> int:
+    base_commit = resolve_base_commit(repo, result.today, config.base_commit, tracked_ref)
+    base_deletions = get_total_deletions_up_to(repo, base_commit, author)
+    committed_deletions = base_deletions + get_committed_deletions(repo, base_commit, author, tracked_ref)
+    if config.include_local and current_ref != tracked_ref:
+        committed_deletions += get_committed_deletions(repo, tracked_ref, author, current_ref)
+    return committed_deletions
 
 
 def _build_points_window(
@@ -100,7 +126,9 @@ def build_refresh_snapshot(repo: Path, author: str, config: TrackerConfig, graph
     tracked_ref = resolve_ref(repo, config.ref)
     current_ref = resolve_current_ref(repo)
     branch_total = _compute_branch_total(repo, author, tracked_ref, current_ref)
+    branch_deletions = _compute_branch_deletions(repo, author, tracked_ref, current_ref)
     all_committed_total = _compute_all_committed_total(repo, result, config, tracked_ref, current_ref)
+    overall_deletions = _compute_overall_committed_deletions(repo, result, config, author, tracked_ref, current_ref)
     committed_today = get_committed_insertions_for_date_combined(
         repo,
         result.today,
@@ -141,6 +169,8 @@ def build_refresh_snapshot(repo: Path, author: str, config: TrackerConfig, graph
         graph_avg=graph_avg,
         graph_max=graph_max,
         branch_total=branch_total,
+        branch_deletions=branch_deletions,
+        overall_deletions=overall_deletions,
         share_text=f"{share_percent:.1f}%",
         uncommitted_deletions=get_uncommitted_deletions(repo),
     )

@@ -21,7 +21,7 @@ DEFAULT_GOAL = 20000
 DEFAULT_BASE_TOTAL = -1
 DEFAULT_BASE_COMMIT = "auto"
 DEFAULT_AUTHOR = "auto"
-CACHE_VERSION = 2
+CACHE_VERSION = 3
 APP_STATE_DIR_NAME = "LineTracker"
 
 BINARY_EXTENSIONS = {
@@ -52,11 +52,15 @@ BINARY_EXTENSIONS = {
     ".lib",
     ".a",
 }
+SHORTSTAT_INSERTIONS_RE = re.compile(r"(\d+)\s+insertions?\(\+\)")
+SHORTSTAT_DELETIONS_RE = re.compile(r"(\d+)\s+deletions?\(-\)")
 
 _COMMITTED_INSERTIONS_CACHE: dict[tuple[str, str, str, str, str, str, str], int] = {}
+_COMMITTED_DELETIONS_CACHE: dict[tuple[str, str, str, str, str, str, str], int] = {}
 _BY_DATE_CACHE: dict[tuple[str, str, str, str, str, str, str, str], dict[dt.date, int]] = {}
 _FOR_DATE_CACHE: dict[tuple[str, str, str, str, str, str, str], int] = {}
 _TOTAL_UP_TO_CACHE: dict[tuple[str, str, str, str], int] = {}
+_TOTAL_DELETIONS_UP_TO_CACHE: dict[tuple[str, str, str, str], int] = {}
 _CACHE_LOCK = threading.RLock()
 _CACHE_LOADED = False
 _CACHE_DIRTY = False
@@ -340,8 +344,10 @@ def _load_cache() -> None:
 
     with _CACHE_LOCK:
         load_map(data.get("committed"), _COMMITTED_INSERTIONS_CACHE)
+        load_map(data.get("committed_deletions"), _COMMITTED_DELETIONS_CACHE)
         load_map(data.get("for_date"), _FOR_DATE_CACHE)
         load_map(data.get("total"), _TOTAL_UP_TO_CACHE)
+        load_map(data.get("total_deletions"), _TOTAL_DELETIONS_UP_TO_CACHE)
         load_map(data.get("by_date"), _BY_DATE_CACHE, convert_dates=True)
 
 
@@ -352,17 +358,23 @@ def _save_cache() -> None:
     payload = {
         "version": CACHE_VERSION,
         "committed": [],
+        "committed_deletions": [],
         "for_date": [],
         "total": [],
+        "total_deletions": [],
         "by_date": [],
     }
     with _CACHE_LOCK:
         for key, value in _COMMITTED_INSERTIONS_CACHE.items():
             payload["committed"].append([list(key), value])
+        for key, value in _COMMITTED_DELETIONS_CACHE.items():
+            payload["committed_deletions"].append([list(key), value])
         for key, value in _FOR_DATE_CACHE.items():
             payload["for_date"].append([list(key), value])
         for key, value in _TOTAL_UP_TO_CACHE.items():
             payload["total"].append([list(key), value])
+        for key, value in _TOTAL_DELETIONS_UP_TO_CACHE.items():
+            payload["total_deletions"].append([list(key), value])
         for key, value in _BY_DATE_CACHE.items():
             payload["by_date"].append(
                 [list(key), {day.isoformat(): val for day, val in value.items()}]
@@ -389,8 +401,10 @@ def clear_cache_for_repo(repo: Path) -> None:
 
     with _CACHE_LOCK:
         clear_dict(_COMMITTED_INSERTIONS_CACHE)
+        clear_dict(_COMMITTED_DELETIONS_CACHE)
         clear_dict(_FOR_DATE_CACHE)
         clear_dict(_TOTAL_UP_TO_CACHE)
+        clear_dict(_TOTAL_DELETIONS_UP_TO_CACHE)
         clear_dict(_BY_DATE_CACHE)
         _mark_cache_dirty()
 
@@ -540,6 +554,64 @@ def parse_numstat_deletions(text: str) -> int:
     return total
 
 
+def parse_shortstat_totals(text: str) -> tuple[int, int]:
+    insertions = sum(int(match.group(1)) for match in SHORTSTAT_INSERTIONS_RE.finditer(text))
+    deletions = sum(int(match.group(1)) for match in SHORTSTAT_DELETIONS_RE.finditer(text))
+    return insertions, deletions
+
+
+def _populate_total_up_to_stats(repo: Path, ref: str, author: str) -> tuple[int, int]:
+    author_patterns = decode_author_patterns(author)
+    if len(author_patterns) > 1:
+        insertions = 0
+        deletions = 0
+        for pattern in author_patterns:
+            child_insertions, child_deletions = _populate_total_up_to_stats(repo, ref, pattern)
+            insertions += child_insertions
+            deletions += child_deletions
+        return insertions, deletions
+
+    author_pattern = author_patterns[0] if author_patterns else ""
+    args = ["log", ref, "--no-renames", "--shortstat", "--pretty=tformat:"]
+    if author_pattern:
+        args.insert(2, f"--author={author_pattern}")
+    out = run_git(repo, args)
+    return parse_shortstat_totals(out)
+
+
+def _populate_committed_range_stats(
+    repo: Path,
+    base_commit: str,
+    author: str,
+    ref: str = "HEAD",
+    exclude_ref: str | None = None,
+) -> tuple[int, int]:
+    author_patterns = decode_author_patterns(author)
+    if len(author_patterns) > 1:
+        insertions = 0
+        deletions = 0
+        for pattern in author_patterns:
+            child_insertions, child_deletions = _populate_committed_range_stats(
+                repo,
+                base_commit,
+                pattern,
+                ref,
+                exclude_ref,
+            )
+            insertions += child_insertions
+            deletions += child_deletions
+        return insertions, deletions
+
+    author_pattern = author_patterns[0] if author_patterns else ""
+    args = ["log", f"{base_commit}..{ref}", "--no-renames", "--shortstat", "--pretty=tformat:"]
+    if author_pattern:
+        args.insert(2, f"--author={author_pattern}")
+    if exclude_ref:
+        args.extend(["--not", exclude_ref])
+    out = run_git(repo, args)
+    return parse_shortstat_totals(out)
+
+
 def parse_date(value: str) -> dt.date:
     return dt.date.fromisoformat(value)
 
@@ -564,22 +636,31 @@ def get_total_insertions_up_to(
     if cached is not None:
         return cached
 
-    author_patterns = decode_author_patterns(author)
-    if len(author_patterns) > 1:
-        value = sum(get_total_insertions_up_to(repo, ref, pattern) for pattern in author_patterns)
-        with _CACHE_LOCK:
-            _TOTAL_UP_TO_CACHE[cache_key] = value
-            _mark_cache_dirty()
-        return value
-
-    author_pattern = author_patterns[0] if author_patterns else ""
-    args = ["log", ref, "--no-renames", "--numstat", "--pretty=tformat:"]
-    if author_pattern:
-        args.insert(2, f"--author={author_pattern}")
-    out = run_git(repo, args)
-    value = parse_numstat_insertions(out)
+    value, deletions = _populate_total_up_to_stats(repo, ref, author)
     with _CACHE_LOCK:
         _TOTAL_UP_TO_CACHE[cache_key] = value
+        _TOTAL_DELETIONS_UP_TO_CACHE[cache_key] = deletions
+        _mark_cache_dirty()
+    return value
+
+
+def get_total_deletions_up_to(
+    repo: Path,
+    ref: str,
+    author: str,
+) -> int:
+    _load_cache()
+    ref_hash = get_ref_hash(repo, ref)
+    cache_key = (_repo_key(repo), author, ref, ref_hash)
+    with _CACHE_LOCK:
+        cached = _TOTAL_DELETIONS_UP_TO_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    insertions, value = _populate_total_up_to_stats(repo, ref, author)
+    with _CACHE_LOCK:
+        _TOTAL_UP_TO_CACHE[cache_key] = insertions
+        _TOTAL_DELETIONS_UP_TO_CACHE[cache_key] = value
         _mark_cache_dirty()
     return value
 
@@ -599,27 +680,34 @@ def get_committed_insertions(
     if cached is not None:
         return cached
 
-    author_patterns = decode_author_patterns(author)
-    if len(author_patterns) > 1:
-        value = sum(
-            get_committed_insertions(repo, base_commit, pattern, ref, exclude_ref)
-            for pattern in author_patterns
-        )
-        with _CACHE_LOCK:
-            _COMMITTED_INSERTIONS_CACHE[cache_key] = value
-            _mark_cache_dirty()
-        return value
-
-    author_pattern = author_patterns[0] if author_patterns else ""
-    args = ["log", f"{base_commit}..{ref}", "--no-renames", "--numstat", "--pretty=tformat:"]
-    if author_pattern:
-        args.insert(2, f"--author={author_pattern}")
-    if exclude_ref:
-        args.extend(["--not", exclude_ref])
-    out = run_git(repo, args)
-    value = parse_numstat_insertions(out)
+    value, deletions = _populate_committed_range_stats(repo, base_commit, author, ref, exclude_ref)
     with _CACHE_LOCK:
         _COMMITTED_INSERTIONS_CACHE[cache_key] = value
+        _COMMITTED_DELETIONS_CACHE[cache_key] = deletions
+        _mark_cache_dirty()
+    return value
+
+
+def get_committed_deletions(
+    repo: Path,
+    base_commit: str,
+    author: str,
+    ref: str = "HEAD",
+    exclude_ref: str | None = None,
+) -> int:
+    _load_cache()
+    ref_hash = get_ref_hash(repo, ref)
+    exclude_hash = get_ref_hash(repo, exclude_ref) if exclude_ref else ""
+    cache_key = (_repo_key(repo), base_commit, author, ref, ref_hash, exclude_ref or "", exclude_hash)
+    with _CACHE_LOCK:
+        cached = _COMMITTED_DELETIONS_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    insertions, value = _populate_committed_range_stats(repo, base_commit, author, ref, exclude_ref)
+    with _CACHE_LOCK:
+        _COMMITTED_INSERTIONS_CACHE[cache_key] = insertions
+        _COMMITTED_DELETIONS_CACHE[cache_key] = value
         _mark_cache_dirty()
     return value
 

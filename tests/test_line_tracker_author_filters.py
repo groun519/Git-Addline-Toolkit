@@ -25,9 +25,9 @@ class AuthorFilterTests(unittest.TestCase):
         def fake_run_git(_: Path, args: list[str]) -> str:
             author_arg = next((value for value in args if value.startswith("--author=")), "")
             if author_arg == "--author=alice@example.com":
-                return "3\t0\tfoo.py\n"
+                return " 1 file changed, 3 insertions(+)\n"
             if author_arg == "--author=bob@example.com":
-                return "5\t0\tbar.py\n"
+                return " 1 file changed, 5 insertions(+)\n"
             return ""
 
         with patch.dict(line_tracker._COMMITTED_INSERTIONS_CACHE, {}, clear=True):

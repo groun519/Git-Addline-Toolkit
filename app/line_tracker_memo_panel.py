@@ -36,6 +36,8 @@ class MemoPanel:
         self.memo_text_value = initial_text.rstrip("\n")
         self.memo_autosave_job: str | None = None
         self.memo_widget_updating = False
+        self.preview_title_wraplength = 300
+        self.preview_item_wraplength = 250
 
     def t(self, key: str) -> str:
         return self.bindings.translate(key)
@@ -162,6 +164,13 @@ class MemoPanel:
             highlightcolor=palette.accent,
         )
         self.memo_preview_canvas.configure(bg=palette.card_bg, highlightbackground=palette.border)
+
+    def set_panel_width_hint(self, panel_width: int) -> None:
+        safe_width = max(220, int(panel_width))
+        self.preview_title_wraplength = max(160, safe_width - 80)
+        self.preview_item_wraplength = max(140, safe_width - 130)
+        if hasattr(self, "memo_preview_inner"):
+            self.refresh_preview()
 
     def get_text(self) -> str:
         if hasattr(self, "memo_text_widget"):
@@ -303,7 +312,7 @@ class MemoPanel:
             self.memo_preview_inner,
             text=title_value,
             style="CardTitle.TLabel",
-            wraplength=300,
+            wraplength=self.preview_title_wraplength,
             justify="left",
         )
         title_value_label.grid(row=row_index, column=0, sticky="ew", pady=(4, 0))
@@ -342,7 +351,7 @@ class MemoPanel:
                 item_row,
                 text=f"- {item_text}",
                 style="CardTitle.TLabel",
-                wraplength=250,
+                wraplength=self.preview_item_wraplength,
                 justify="left",
             )
             item_label.grid(row=0, column=0, sticky="w")

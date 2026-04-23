@@ -79,10 +79,12 @@ BASE_TILE_MIN_WIDTH = 250
 BASE_TILE_LABEL_WRAP = 240
 SETTINGS_FILE_NAME = "line_tracker_ui_settings.json"
 WINDOW_SCREEN_MARGIN = 80
+WINDOW_FIT_SAFETY = 24
 GEOMETRY_RE = re.compile(r"^(?P<width>\d+)x(?P<height>\d+)(?:(?P<x>[+-]\d+)(?P<y>[+-]\d+))?$")
 AUTHOR_IDENTITY_RE = re.compile(r"^(?P<name>.+?)\s*<(?P<email>[^<>]+)>$")
 AUTHOR_HANDLE_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$")
 GITHUB_NOREPLY_DOMAIN = "users.noreply.github.com"
+RESPONSIVE_REPO_ENTRY_WIDTH = 52
 
 LANG_OPTIONS = {"한국어": "ko", "English": "en"}
 LANG_DISPLAY = {"ko": "한국어", "en": "English"}
@@ -95,6 +97,7 @@ TEXT = {
         "theme_cream": "크림",
         "theme_slate": "슬레이트",
         "theme_dark": "다크",
+        "theme_harddark": "하드다크",
         "theme_vs": "VS",
         "theme_neon": "네온",
         "theme_cherry": "체리",
@@ -144,6 +147,9 @@ TEXT = {
         "overall_progress": "전체 진행률",
         "daily_progress": "일일 진행률",
         "current_changes": "현재 변경",
+        "daily_stats_section": "일일 통계",
+        "branch_stats_section": "브랜치 통계",
+        "overall_stats_section": "전체 통계",
         "refresh": "새로고침",
         "copy": "복사",
         "compact_toggle": "축소",
@@ -209,6 +215,7 @@ TEXT = {
         "theme_cream": "Cream",
         "theme_slate": "Slate",
         "theme_dark": "Dark",
+        "theme_harddark": "Hard Dark",
         "theme_vs": "VS",
         "theme_neon": "Neon",
         "theme_cherry": "Cherry",
@@ -258,6 +265,9 @@ TEXT = {
         "overall_progress": "Overall Progress",
         "daily_progress": "Daily Progress",
         "current_changes": "Current Changes",
+        "daily_stats_section": "Daily Stats",
+        "branch_stats_section": "Branch Stats",
+        "overall_stats_section": "Overall Stats",
         "refresh": "Refresh",
         "copy": "Copy",
         "compact_toggle": "Compact",
@@ -440,6 +450,11 @@ def contrast_text_color(background: str) -> str:
     return "#10161c" if luminance >= 150 else "#f5f8fb"
 
 
+def _hex_to_colorref(value: str) -> int:
+    red, green, blue = _hex_to_rgb(value)
+    return red | (green << 8) | (blue << 16)
+
+
 def parse_date(value: str) -> dt.date:
     return dt.date.fromisoformat(value)
 
@@ -500,16 +515,17 @@ class LineTrackerApp:
         self.ref = resolve_ref(self.repo, args.ref)
         self.today = args.today
         self.month_end = args.month_end
-        default_width = BASE_WINDOW_WIDTH
+        self.screen_limit_width = max(640, self.root.winfo_screenwidth() - WINDOW_SCREEN_MARGIN - WINDOW_FIT_SAFETY)
+        default_width = min(BASE_WINDOW_WIDTH, self.screen_limit_width)
         default_height = BASE_WINDOW_HEIGHT
         min_height = MIN_WINDOW_HEIGHT
-        initial_min_width = min(MIN_WINDOW_WIDTH, max(640, self.root.winfo_screenwidth() - WINDOW_SCREEN_MARGIN))
+        initial_min_width = min(MIN_WINDOW_WIDTH, self.screen_limit_width)
         default_geometry = f"{default_width}x{default_height}"
         saved_geometry = self.normalize_geometry(self.settings.geometry)
         self.last_window_geometry = saved_geometry or default_geometry
         self.root.geometry(self.last_window_geometry)
         self.root.minsize(initial_min_width, min_height)
-        self.root.maxsize(default_width, self.root.winfo_screenheight())
+        self.root.maxsize(self.screen_limit_width, self.root.winfo_screenheight())
         self.base_window_width = BASE_WINDOW_WIDTH
         self.min_height = min_height
 
@@ -597,6 +613,12 @@ class LineTrackerApp:
         self.meta_value_vars = [tk.StringVar(value="") for _ in range(2)]
         self.tile_label_vars = [tk.StringVar(value="") for _ in range(5)]
         self.tile_value_vars = [tk.StringVar(value="") for _ in range(5)]
+        self.daily_stats_added_var = tk.StringVar(value="+0")
+        self.daily_stats_removed_var = tk.StringVar(value="-0")
+        self.branch_stats_added_var = tk.StringVar(value="+0")
+        self.branch_stats_removed_var = tk.StringVar(value="-0")
+        self.overall_stats_added_var = tk.StringVar(value="+0")
+        self.overall_stats_removed_var = tk.StringVar(value="-0")
         self.current_ref = resolve_current_ref(self.repo)
         self.main_total_committed = 0
         self.branch_total_committed = 0
@@ -625,6 +647,13 @@ class LineTrackerApp:
         self.compact_alpha = min(max(float(self.settings.compact_alpha), COMPACT_WINDOW_ALPHA_MIN), COMPACT_WINDOW_ALPHA_MAX)
         self.compact_alpha_var = tk.DoubleVar(value=round(self.compact_alpha * 100))
         self.compact_alpha_text_var = tk.StringVar(value="")
+        self.base_required_width = 0
+        self.layout_scale = 1.0
+        self.graph_canvas_width = GRAPH_CANVAS_WIDTH
+        self.progress_bar_length = BAR_LENGTH
+        self.tile_min_width = BASE_TILE_MIN_WIDTH
+        self.tile_wrap = BASE_TILE_LABEL_WRAP
+        self.repo_entry_width = RESPONSIVE_REPO_ENTRY_WIDTH
 
     def _build_header(self, container: ttk.Frame) -> None:
         header_frame = ttk.Frame(container, style="App.TFrame")
@@ -690,7 +719,7 @@ class LineTrackerApp:
         self.repo_header_label = ttk.Label(repo_header, text=self.t("repo_label"), style="Subtitle.TLabel")
         self.repo_header_label.grid(row=0, column=0, sticky="w", pady=(0, 2))
 
-        self.repo_entry = ttk.Entry(repo_header, textvariable=self.repo_entry_var, width=52)
+        self.repo_entry = ttk.Entry(repo_header, textvariable=self.repo_entry_var, width=self.repo_entry_width)
         self.repo_entry.grid(row=1, column=0, sticky="ew")
         self.repo_entry.bind("<Return>", self.on_repo_entry_enter)
 
@@ -708,7 +737,7 @@ class LineTrackerApp:
         meta_row.columnconfigure(1, weight=1, uniform="meta")
 
         for idx in range(2):
-            chip = ttk.Frame(meta_row, style="Chip.TFrame", padding=(8, 6))
+            chip = ttk.Frame(meta_row, style="Chip.TFrame", padding=(8, 4))
             chip.grid(row=0, column=idx, sticky="ew", padx=(0, 10) if idx == 0 else (0, 0))
             chip.columnconfigure(1, weight=1)
 
@@ -718,96 +747,176 @@ class LineTrackerApp:
             value = ttk.Label(chip, textvariable=self.meta_value_vars[idx], style="ChipValue.TLabel")
             value.grid(row=0, column=1, sticky="w", padx=(6, 0))
 
-        self.tile_grid = ttk.Frame(output_section, style="App.TFrame")
-        self.tile_grid.grid(row=1, column=0, sticky="ew")
         tile_min_width = BASE_TILE_MIN_WIDTH
-        self.tile_grid.columnconfigure(0, weight=1, uniform="tile", minsize=tile_min_width)
-        self.tile_grid.columnconfigure(1, weight=1, uniform="tile", minsize=tile_min_width)
-
         tile_accents = self.theme.tile_accents
-        tile_positions = [
-            (0, 0, 1),
-            (0, 1, 1),
-            (1, 0, 1),
-            (1, 1, 1),
-            (2, 0, 2),
-        ]
         self.tile_label_widgets: list[ttk.Label] = []
         self.tile_accent_widgets: list[tk.Frame] = []
+        self.tile_grids: list[ttk.Frame] = []
         tile_wrap = BASE_TILE_LABEL_WRAP
-        for idx in range(5):
-            row, col, colspan = tile_positions[idx]
-            tile = ttk.Frame(self.tile_grid, style="Tile.TFrame", padding=(10, 8))
-            tile.grid(
-                row=row,
-                column=col,
-                columnspan=colspan,
-                sticky="ew",
-                padx=(0, 10) if col == 0 and colspan == 1 else (0, 0),
-                pady=(0, 12) if row < 2 else (0, 0),
-            )
-            tile.columnconfigure(1, weight=1)
 
-            accent = tk.Frame(tile, bg=tile_accents[idx], width=4)
-            accent.grid(row=0, column=0, rowspan=2, sticky="ns", padx=(0, 8))
-            self.tile_accent_widgets.append(accent)
+        daily_stats_section = ttk.Frame(output_section, style="App.TFrame")
+        daily_stats_section.grid(row=1, column=0, sticky="ew")
+        daily_stats_header = ttk.Frame(daily_stats_section, style="App.TFrame")
+        daily_stats_header.grid(row=0, column=0, sticky="w", pady=(0, 2))
 
-            label = ttk.Label(
-                tile,
-                textvariable=self.tile_label_vars[idx],
-                style="TileLabel.TLabel",
-                wraplength=tile_wrap,
-            )
-            label.grid(row=0, column=1, sticky="w")
-            self.tile_label_widgets.append(label)
-
-            value = ttk.Label(tile, textvariable=self.tile_value_vars[idx], style="TileValue.TLabel")
-            value.grid(row=1, column=1, sticky="w", pady=(2, 0))
-
-        delta_card = ttk.Frame(output_section, style="Card.TFrame", padding=(10, 8))
-        delta_card.grid(row=2, column=0, sticky="ew", pady=(10, 0))
-        delta_card.columnconfigure(1, weight=1)
-
-        self.delta_label = ttk.Label(delta_card, text=self.t("current_changes"), style="CardTitle.TLabel")
-        self.delta_label.grid(row=0, column=0, sticky="w")
-
-        self.delta_value_frame = ttk.Frame(delta_card, style="CardInner.TFrame")
-        self.delta_value_frame.grid(row=0, column=1, sticky="e")
-
-        self.delta_added_var = tk.StringVar(value="+0")
-        self.delta_removed_var = tk.StringVar(value="-0")
-
-        self.delta_added_box = ttk.Frame(self.delta_value_frame, style="DeltaBox.TFrame", padding=(8, 4))
-        self.delta_added_box.grid(row=0, column=0, padx=(0, 8))
-
-        self.delta_added_label = ttk.Label(
-            self.delta_added_box,
-            textvariable=self.delta_added_var,
-            style="Stat.TLabel",
+        self.daily_stats_label = ttk.Label(
+            daily_stats_header,
+            text=self.t("daily_stats_section"),
+            style="Section.TLabel",
         )
-        self.delta_added_label.grid(row=0, column=0, sticky="e")
-        self.delta_added_label.configure(foreground=self.theme.success)
+        self.daily_stats_label.grid(row=0, column=0, sticky="w")
 
-        self.delta_removed_box = ttk.Frame(self.delta_value_frame, style="DeltaBox.TFrame", padding=(8, 4))
-        self.delta_removed_box.grid(row=0, column=1)
-
-        self.delta_removed_label = ttk.Label(
-            self.delta_removed_box,
-            textvariable=self.delta_removed_var,
-            style="Stat.TLabel",
+        self.daily_stats_added_label = ttk.Label(
+            daily_stats_header,
+            textvariable=self.daily_stats_added_var,
+            style="SectionDeltaAdd.TLabel",
         )
-        self.delta_removed_label.grid(row=0, column=0, sticky="e")
-        self.delta_removed_label.configure(foreground=self.theme.danger)
+        self.daily_stats_added_label.grid(row=0, column=1, sticky="w", padx=(10, 0))
+
+        self.daily_stats_removed_label = ttk.Label(
+            daily_stats_header,
+            textvariable=self.daily_stats_removed_var,
+            style="SectionDeltaRemove.TLabel",
+        )
+        self.daily_stats_removed_label.grid(row=0, column=2, sticky="w", padx=(8, 0))
+
+        self.daily_tile_grid = ttk.Frame(daily_stats_section, style="App.TFrame")
+        self.daily_tile_grid.grid(row=1, column=0, sticky="ew")
+        self.daily_tile_grid.columnconfigure(0, weight=1, uniform="tile", minsize=tile_min_width)
+        self.daily_tile_grid.columnconfigure(1, weight=1, uniform="tile", minsize=tile_min_width)
+        self.tile_grids.append(self.daily_tile_grid)
+
+        daily_tile_positions = {
+            0: (0, 0, 1),
+            1: (0, 1, 1),
+        }
+        for idx in (0, 1):
+            row, col, colspan = daily_tile_positions[idx]
+            self._build_summary_tile(self.daily_tile_grid, idx, row, col, colspan, tile_wrap, tile_accents)
+
+        lower_stats_stack = ttk.Frame(output_section, style="App.TFrame")
+        lower_stats_stack.grid(row=2, column=0, sticky="ew", pady=(6, 0))
+        lower_stats_stack.columnconfigure(0, weight=1)
+
+        branch_stats_section = ttk.Frame(lower_stats_stack, style="App.TFrame")
+        branch_stats_section.grid(row=0, column=0, sticky="ew")
+        branch_stats_header = ttk.Frame(branch_stats_section, style="App.TFrame")
+        branch_stats_header.grid(row=0, column=0, sticky="w", pady=(0, 2))
+
+        self.branch_stats_label = ttk.Label(
+            branch_stats_header,
+            text=self.t("branch_stats_section"),
+            style="Section.TLabel",
+        )
+        self.branch_stats_label.grid(row=0, column=0, sticky="w")
+
+        self.branch_stats_added_label = ttk.Label(
+            branch_stats_header,
+            textvariable=self.branch_stats_added_var,
+            style="SectionDeltaAdd.TLabel",
+        )
+        self.branch_stats_added_label.grid(row=0, column=1, sticky="w", padx=(10, 0))
+
+        self.branch_stats_removed_label = ttk.Label(
+            branch_stats_header,
+            textvariable=self.branch_stats_removed_var,
+            style="SectionDeltaRemove.TLabel",
+        )
+        self.branch_stats_removed_label.grid(row=0, column=2, sticky="w", padx=(8, 0))
+
+        self.branch_tile_grid = ttk.Frame(branch_stats_section, style="App.TFrame")
+        self.branch_tile_grid.grid(row=1, column=0, sticky="ew")
+        self.branch_tile_grid.columnconfigure(0, weight=1, minsize=tile_min_width)
+        self.tile_grids.append(self.branch_tile_grid)
+
+        branch_tile_positions = {
+            2: (0, 0, 1),
+        }
+        for idx in (2,):
+            row, col, colspan = branch_tile_positions[idx]
+            self._build_summary_tile(self.branch_tile_grid, idx, row, col, colspan, tile_wrap, tile_accents)
+
+        overall_stats_section = ttk.Frame(lower_stats_stack, style="App.TFrame")
+        overall_stats_section.grid(row=1, column=0, sticky="ew", pady=(6, 0))
+        overall_stats_header = ttk.Frame(overall_stats_section, style="App.TFrame")
+        overall_stats_header.grid(row=0, column=0, sticky="w", pady=(0, 2))
+
+        self.overall_stats_label = ttk.Label(
+            overall_stats_header,
+            text=self.t("overall_stats_section"),
+            style="Section.TLabel",
+        )
+        self.overall_stats_label.grid(row=0, column=0, sticky="w")
+
+        self.overall_stats_added_label = ttk.Label(
+            overall_stats_header,
+            textvariable=self.overall_stats_added_var,
+            style="SectionDeltaAdd.TLabel",
+        )
+        self.overall_stats_added_label.grid(row=0, column=1, sticky="w", padx=(10, 0))
+
+        self.overall_stats_removed_label = ttk.Label(
+            overall_stats_header,
+            textvariable=self.overall_stats_removed_var,
+            style="SectionDeltaRemove.TLabel",
+        )
+        self.overall_stats_removed_label.grid(row=0, column=2, sticky="w", padx=(8, 0))
+
+        self.overall_tile_grid = ttk.Frame(overall_stats_section, style="App.TFrame")
+        self.overall_tile_grid.grid(row=1, column=0, sticky="ew")
+        self.overall_tile_grid.columnconfigure(0, weight=1, minsize=tile_min_width)
+        self.tile_grids.append(self.overall_tile_grid)
+
+        self.overall_tile_widget = self._build_summary_tile(self.overall_tile_grid, 3, 0, 0, 1, tile_wrap, tile_accents)
+        self.overall_tile_widget.grid_configure(pady=(0, 0))
+
+    def _build_summary_tile(
+        self,
+        parent: ttk.Frame,
+        idx: int,
+        row: int,
+        col: int,
+        colspan: int,
+        tile_wrap: int,
+        tile_accents: tuple[str, ...] | list[str],
+    ) -> ttk.Frame:
+        tile = ttk.Frame(parent, style="Tile.TFrame", padding=(10, 5))
+        tile.grid(
+            row=row,
+            column=col,
+            columnspan=colspan,
+            sticky="ew",
+            padx=(0, 8) if col == 0 and colspan == 1 else (0, 0),
+            pady=(0, 4) if row == 0 else (0, 0),
+        )
+        tile.columnconfigure(1, weight=1)
+
+        accent = tk.Frame(tile, bg=tile_accents[idx], width=4)
+        accent.grid(row=0, column=0, rowspan=2, sticky="ns", padx=(0, 8))
+        self.tile_accent_widgets.append(accent)
+
+        label = ttk.Label(
+            tile,
+            textvariable=self.tile_label_vars[idx],
+            style="TileLabel.TLabel",
+            wraplength=tile_wrap,
+        )
+        label.grid(row=0, column=1, sticky="w")
+        self.tile_label_widgets.append(label)
+
+        value = ttk.Label(tile, textvariable=self.tile_value_vars[idx], style="TileValue.TLabel")
+        value.grid(row=1, column=1, sticky="w", pady=(1, 0))
+        return tile
 
     def _build_progress_section(self, container: ttk.Frame) -> None:
         progress_section = ttk.Frame(container, style="App.TFrame")
-        progress_section.grid(row=2, column=0, sticky="ew", padx=(0, 10), pady=(10, 0))
+        progress_section.grid(row=2, column=0, sticky="ew", padx=(0, 10), pady=(0, 0))
         progress_section.columnconfigure(0, weight=1)
 
         self.progress_title = ttk.Label(progress_section, text=self.t("progress"), style="Section.TLabel")
-        self.progress_title.grid(row=0, column=0, sticky="w", pady=(0, 6))
+        self.progress_title.grid(row=0, column=0, sticky="w", pady=(0, 4))
 
-        progress_card = ttk.Frame(progress_section, style="Card.TFrame", padding=(12, 10))
+        progress_card = ttk.Frame(progress_section, style="Card.TFrame", padding=(12, 8))
         progress_card.grid(row=1, column=0, sticky="ew")
 
         self.overall_progress_title = ttk.Label(progress_card, text=self.t("overall_progress"), style="CardTitle.TLabel")
@@ -820,7 +929,7 @@ class LineTrackerApp:
             mode="determinate",
             maximum=100.0,
             variable=self.overall_progress_var,
-            length=BAR_LENGTH,
+            length=self.progress_bar_length,
             style="Overall.Horizontal.TProgressbar",
         )
         self.overall_progress_bar.grid(row=1, column=0, sticky="ew", pady=(6, 0))
@@ -843,7 +952,7 @@ class LineTrackerApp:
             mode="determinate",
             maximum=100.0,
             variable=self.daily_progress_var,
-            length=BAR_LENGTH,
+            length=self.progress_bar_length,
             style="Daily.Horizontal.TProgressbar",
         )
         self.daily_progress_bar.grid(row=4, column=0, sticky="ew", pady=(6, 0))
@@ -869,6 +978,7 @@ class LineTrackerApp:
         right_area.grid(row=1, column=2, rowspan=2, sticky="nw", padx=(14, 0))
         right_area.columnconfigure(0, weight=0, minsize=GRAPH_CARD_WIDTH)
         right_area.columnconfigure(1, weight=0, minsize=NOTE_CARD_WIDTH)
+        self.right_area = right_area
 
         self._build_graph_section(right_area, saved_graph_days)
         self._build_memo_section(right_area)
@@ -1003,13 +1113,14 @@ class LineTrackerApp:
         self.custom_today_var = tk.BooleanVar(value=saved_custom_today_enabled)
         self.today_entry_var = tk.StringVar(value=saved_today_text)
         controls_section = ttk.Frame(right_area, style="App.TFrame")
-        controls_section.grid(row=1, column=0, sticky="ew", padx=(0, 10), pady=(10, 0))
+        controls_section.grid(row=1, column=0, sticky="ew", padx=(0, 10), pady=(0, 0))
         controls_section.columnconfigure(0, weight=1, minsize=GRAPH_CARD_WIDTH)
+        self.controls_section = controls_section
 
         self.controls_title = ttk.Label(controls_section, text=self.t("settings"), style="Section.TLabel")
-        self.controls_title.grid(row=0, column=0, sticky="w", pady=(0, 6))
+        self.controls_title.grid(row=0, column=0, sticky="w", pady=(0, 4))
 
-        controls_card = ttk.Frame(controls_section, style="Card.TFrame", padding=(12, 10))
+        controls_card = ttk.Frame(controls_section, style="Card.TFrame", padding=(12, 8))
         controls_card.grid(row=1, column=0, sticky="ew")
 
         self.custom_today_check = ttk.Checkbutton(
@@ -1163,6 +1274,14 @@ class LineTrackerApp:
         )
         self.compact_restore_button.grid(row=0, column=1, sticky="e", padx=(6, 0))
 
+        self.compact_mode_button = ttk.Button(
+            compact_actions,
+            text=self.t("compact_mode_to_strip"),
+            command=self.toggle_compact_variant,
+            style="CompactTool.TButton",
+        )
+        self.compact_mode_button.grid(row=0, column=2, sticky="e", padx=(6, 0))
+
         self.compact_progress_label = ttk.Label(
             self.compact_card,
             text=self.t("compact_today_progress"),
@@ -1204,7 +1323,7 @@ class LineTrackerApp:
         compact_delta_values = ttk.Frame(compact_delta_row, style="CardInner.TFrame")
         compact_delta_values.grid(row=0, column=1, sticky="w")
 
-        self.compact_added_box = ttk.Frame(compact_delta_values, style="DeltaBox.TFrame", padding=(8, 4))
+        self.compact_added_box = ttk.Frame(compact_delta_values, style="CardInner.TFrame", padding=(0, 0))
         self.compact_added_box.grid(row=0, column=0, sticky="w")
 
         self.compact_added_label = ttk.Label(
@@ -1214,7 +1333,7 @@ class LineTrackerApp:
         )
         self.compact_added_label.grid(row=0, column=0, sticky="w")
 
-        self.compact_removed_box = ttk.Frame(compact_delta_values, style="DeltaBox.TFrame", padding=(8, 4))
+        self.compact_removed_box = ttk.Frame(compact_delta_values, style="CardInner.TFrame", padding=(0, 0))
         self.compact_removed_box.grid(row=0, column=1, sticky="w", padx=(8, 0))
 
         self.compact_removed_label = ttk.Label(
@@ -1254,15 +1373,7 @@ class LineTrackerApp:
             command=self.on_compact_alpha_change,
             length=68,
         )
-        self.compact_opacity_scale.grid(row=1, column=0, sticky="e", pady=(4, 0))
-
-        self.compact_mode_button = ttk.Button(
-            compact_footer_actions,
-            text=self.t("compact_mode_to_strip"),
-            command=self.toggle_compact_variant,
-            style="CompactTool.TButton",
-        )
-        self.compact_mode_button.grid(row=0, column=0, sticky="e")
+        self.compact_opacity_scale.grid(row=0, column=0, sticky="e")
 
         self.compact_status_label = ttk.Label(
             self.compact_card,
@@ -1436,7 +1547,7 @@ class LineTrackerApp:
             return
         self.root.update_idletasks()
         panel_width = max(
-            NOTE_CARD_WIDTH - 24,
+            int((NOTE_CARD_WIDTH - 24) * self.layout_scale),
             self.memo_panel.winfo_reqwidth(),
             self.grass_panel.winfo_reqwidth(),
         )
@@ -1471,19 +1582,32 @@ class LineTrackerApp:
             f"- {self.t('current_uncommitted_label')}: {result.uncommitted_insertions}{self.t('lines_suffix')}",
         ]
 
-    def set_output_lines(self, result: TrackerResult, branch_total: int, share_text: str) -> None:
+    def set_output_lines(
+        self,
+        result: TrackerResult,
+        branch_total: int,
+        branch_deletions: int,
+        overall_deletions: int,
+        uncommitted_deletions: int,
+        share_text: str,
+    ) -> None:
         month_label = self.format_month_label(result.month_end.month)
         self.meta_label_vars[0].set(self.t("today_label"))
         self.meta_value_vars[0].set(result.today.isoformat())
         self.meta_label_vars[1].set(self.t("days_left_label", month=month_label))
         self.meta_value_vars[1].set(f"{result.days_left_including_today}{self.t('day_suffix')}")
+        self.daily_stats_added_var.set(f"+{result.uncommitted_insertions:,}")
+        self.daily_stats_removed_var.set(f"-{uncommitted_deletions:,}")
+        self.branch_stats_added_var.set(f"+{branch_total:,}")
+        self.branch_stats_removed_var.set(f"-{branch_deletions:,}")
+        self.overall_stats_added_var.set(f"+{result.committed_total + result.uncommitted_insertions:,}")
+        self.overall_stats_removed_var.set(f"-{overall_deletions + uncommitted_deletions:,}")
 
         branch_value = f"{branch_total:,}{self.t('lines_suffix')}" if branch_total is not None else ""
         tiles = [
             (self.t("daily_required_label"), f"{result.need_today}{self.t('per_day_suffix')}"),
             (self.t("after_commit_daily_label"), f"{result.need_after_commit}{self.t('per_day_suffix')}"),
             (self.t("branch_only_label"), branch_value),
-            (self.t("current_uncommitted_label"), f"{result.uncommitted_insertions}{self.t('lines_suffix')}"),
             (self.t("share_label"), share_text),
         ]
 
@@ -1507,6 +1631,9 @@ class LineTrackerApp:
         self.graph_days_label.configure(text=self.t("graph_period"))
         self.memo_tab_button.configure(text=self.t("tab_memo"))
         self.grass_tab_button.configure(text=self.t("tab_grass"))
+        self.daily_stats_label.configure(text=self.t("daily_stats_section"))
+        self.branch_stats_label.configure(text=self.t("branch_stats_section"))
+        self.overall_stats_label.configure(text=self.t("overall_stats_section"))
         if self.memo_panel_controller is not None:
             self.memo_panel_controller.apply_language()
         if self.grass_panel_controller is not None:
@@ -1525,7 +1652,6 @@ class LineTrackerApp:
         self.progress_title.configure(text=self.t("progress"))
         self.overall_progress_title.configure(text=self.t("overall_progress"))
         self.daily_progress_title.configure(text=self.t("daily_progress"))
-        self.delta_label.configure(text=self.t("current_changes"))
         self.redraw_compact_launch_button()
         self.refresh_button.configure(text=self.t("refresh"))
         self.copy_button.configure(text=self.t("copy"))
@@ -1571,13 +1697,15 @@ class LineTrackerApp:
         self.save_settings()
 
     def apply_layout_for_language(self) -> None:
-        tile_min_width = BASE_TILE_MIN_WIDTH
-        tile_wrap = BASE_TILE_LABEL_WRAP
-        if hasattr(self, "tile_grid"):
-            self.tile_grid.columnconfigure(0, minsize=tile_min_width)
-            self.tile_grid.columnconfigure(1, minsize=tile_min_width)
+        self.apply_responsive_layout()
+        tile_min_width = self.tile_min_width
+        tile_wrap = self.tile_wrap
+        for tile_grid in getattr(self, "tile_grids", []):
+            tile_grid.columnconfigure(0, minsize=tile_min_width)
+            tile_grid.columnconfigure(1, minsize=tile_min_width)
         for label in getattr(self, "tile_label_widgets", []):
             label.configure(wraplength=tile_wrap)
+        self.freeze_note_panel_size()
 
         if self.compact_mode:
             return
@@ -1596,10 +1724,125 @@ class LineTrackerApp:
         self.last_window_geometry = current_geometry
         self.root.geometry(current_geometry)
 
+    def apply_responsive_layout(self) -> None:
+        try:
+            self.root.update_idletasks()
+        except tk.TclError:
+            return
+
+        if self.base_required_width <= 0:
+            try:
+                self.base_required_width = max(BASE_WINDOW_WIDTH, int(self.container.winfo_reqwidth()))
+            except (tk.TclError, TypeError, ValueError):
+                self.base_required_width = BASE_WINDOW_WIDTH
+
+        screen_limit = max(640, self.root.winfo_screenwidth() - WINDOW_SCREEN_MARGIN)
+        self.screen_limit_width = screen_limit
+        target_width = screen_limit
+        scale = min(1.0, target_width / max(self.base_required_width, 1))
+        self._apply_responsive_scale(scale)
+
+        try:
+            self.root.update_idletasks()
+            current_required_width = max(1, int(self.container.winfo_reqwidth()))
+        except (tk.TclError, TypeError, ValueError):
+            current_required_width = 0
+
+        if current_required_width > screen_limit:
+            correction = (target_width / current_required_width) * 0.99
+            self._apply_responsive_scale(max(0.55, self.layout_scale * correction))
+
+    def _apply_responsive_scale(self, scale: float) -> None:
+        self.layout_scale = min(max(scale, 0.55), 1.0)
+        self.graph_canvas_width = max(300, int(round(GRAPH_CANVAS_WIDTH * self.layout_scale)))
+        self.progress_bar_length = max(300, int(round(BAR_LENGTH * self.layout_scale)))
+        self.tile_min_width = max(180, int(round(BASE_TILE_MIN_WIDTH * self.layout_scale)))
+        self.tile_wrap = max(170, int(round(BASE_TILE_LABEL_WRAP * self.layout_scale)))
+        self.repo_entry_width = max(28, int(round(RESPONSIVE_REPO_ENTRY_WIDTH * self.layout_scale)))
+
+        if hasattr(self, "repo_entry"):
+            self.repo_entry.configure(width=self.repo_entry_width)
+        if hasattr(self, "overall_progress_bar"):
+            self.overall_progress_bar.configure(length=self.progress_bar_length)
+        if hasattr(self, "daily_progress_bar"):
+            self.daily_progress_bar.configure(length=self.progress_bar_length)
+        if hasattr(self, "graph_canvas"):
+            self.graph_canvas.configure(width=self.graph_canvas_width, height=GRAPH_CANVAS_HEIGHT)
+
+        graph_column_width = self.graph_canvas_width + 24
+        if hasattr(self, "right_area"):
+            self.right_area.columnconfigure(0, minsize=graph_column_width)
+        if hasattr(self, "controls_section"):
+            self.controls_section.columnconfigure(0, minsize=graph_column_width)
+
+        memo_panel_controller = getattr(self, "memo_panel_controller", None)
+        if memo_panel_controller is not None:
+            memo_panel_controller.set_panel_width_hint(max(280, int(round(NOTE_CARD_WIDTH * self.layout_scale))))
+
+        grass_panel_controller = getattr(self, "grass_panel_controller", None)
+        if grass_panel_controller is not None:
+            grass_panel_controller.set_layout_scale(self.layout_scale)
+
+        if getattr(self, "graph_highlight_day", None) is not None and hasattr(self, "graph_canvas"):
+            self.draw_daily_graph(getattr(self, "graph_points", []), self.graph_highlight_day)
+
     def apply_color_palette(self) -> None:
         self.root.configure(bg=self.theme.app_bg)
         self._configure_style_palette()
         self._configure_widget_palette()
+        self.apply_window_chrome_theme()
+
+    def apply_window_chrome_theme(self) -> None:
+        if sys.platform != "win32":
+            return
+        if getattr(self, "compact_mode", False):
+            return
+
+        try:
+            self.root.update_idletasks()
+        except tk.TclError:
+            return
+
+        try:
+            import ctypes
+            from ctypes import wintypes
+        except Exception:
+            return
+
+        try:
+            hwnd = ctypes.windll.user32.GetAncestor(self.root.winfo_id(), 2)
+        except Exception:
+            hwnd = 0
+        if not hwnd:
+            return
+
+        caption_color = blend_hex(self.theme.app_bg, self.theme.card_bg, 0.2)
+        text_color = contrast_text_color(caption_color)
+        border_color = self.theme.border
+        use_dark_mode = 0 if text_color == "#10161c" else 1
+
+        try:
+            dwmapi = ctypes.windll.dwmapi
+        except Exception:
+            return
+
+        def set_dwm_attr(attribute: int, value: int) -> None:
+            data = wintypes.DWORD(int(value))
+            try:
+                dwmapi.DwmSetWindowAttribute(
+                    wintypes.HWND(hwnd),
+                    ctypes.c_uint(attribute),
+                    ctypes.byref(data),
+                    ctypes.sizeof(data),
+                )
+            except Exception:
+                pass
+
+        for attribute in (20, 19):
+            set_dwm_attr(attribute, use_dark_mode)
+        set_dwm_attr(35, _hex_to_colorref(caption_color))
+        set_dwm_attr(36, _hex_to_colorref(text_color))
+        set_dwm_attr(34, _hex_to_colorref(border_color))
 
     def _configure_style_palette(self) -> None:
         palette = self.theme
@@ -1612,6 +1855,8 @@ class LineTrackerApp:
         self.style.configure("Version.TLabel", background=palette.card_bg, foreground=palette.muted_text, font=FONT_VERSION)
         self.style.configure("Subtitle.TLabel", background=palette.app_bg, foreground=palette.muted_text, font=FONT_SUBTITLE)
         self.style.configure("Section.TLabel", background=palette.app_bg, foreground=palette.text, font=FONT_SECTION)
+        self.style.configure("SectionDeltaAdd.TLabel", background=palette.app_bg, foreground=palette.success, font=FONT_SUBTITLE)
+        self.style.configure("SectionDeltaRemove.TLabel", background=palette.app_bg, foreground=palette.danger, font=FONT_SUBTITLE)
         self.style.configure("CardTitle.TLabel", background=palette.card_bg, foreground=palette.text, font=FONT_BODY)
         self.style.configure("CompactTitle.TLabel", background=palette.card_bg, foreground=palette.text, font=FONT_SECTION)
         self.style.configure("CardLabel.TLabel", background=palette.card_bg, foreground=palette.muted_text, font=FONT_BODY)
@@ -1999,10 +2244,6 @@ class LineTrackerApp:
             self.header_accent_bar.configure(bg=palette.accent)
         for idx, widget in enumerate(getattr(self, "tile_accent_widgets", [])):
             widget.configure(bg=palette.tile_accents[idx % len(palette.tile_accents)])
-        if hasattr(self, "delta_added_label"):
-            self.delta_added_label.configure(foreground=palette.success)
-        if hasattr(self, "delta_removed_label"):
-            self.delta_removed_label.configure(foreground=palette.danger)
         if hasattr(self, "compact_added_label"):
             self.compact_added_label.configure(foreground=palette.success)
         if hasattr(self, "compact_removed_label"):
@@ -2677,6 +2918,7 @@ class LineTrackerApp:
         self.last_window_geometry = restored_geometry
         self.root.deiconify()
         self.root.geometry(restored_geometry)
+        self.apply_window_chrome_theme()
 
     def load_settings(self) -> UISettings:
         for candidate in (self.settings_path, self.legacy_settings_path):
@@ -2878,9 +3120,14 @@ class LineTrackerApp:
 
         lines = self.format_output_lines(result)
         self.current_output = "\n".join(lines)
-        self.set_output_lines(result, branch_total, snapshot.share_text)
-        self.delta_added_var.set(f"+{result.uncommitted_insertions:,}")
-        self.delta_removed_var.set(f"-{snapshot.uncommitted_deletions:,}")
+        self.set_output_lines(
+            result,
+            branch_total,
+            snapshot.branch_deletions,
+            snapshot.overall_deletions,
+            snapshot.uncommitted_deletions,
+            snapshot.share_text,
+        )
         self.update_progress(result, snapshot.today_done, snapshot.today_target)
         self.update_graph(snapshot.points, result.today, snapshot.graph_days, snapshot.graph_avg, snapshot.graph_max)
         uncommitted_today = result.uncommitted_insertions if result.today == dt.date.today() else 0
@@ -2987,8 +3234,8 @@ class LineTrackerApp:
         palette = self.theme
         canvas.delete("all")
 
-        width = GRAPH_CANVAS_WIDTH
-        height = GRAPH_CANVAS_HEIGHT
+        width = max(1, int(canvas.winfo_width() or canvas.cget("width")))
+        height = max(1, int(canvas.winfo_height() or canvas.cget("height")))
         margin_left = 42
         margin_right = 10
         margin_top = 8

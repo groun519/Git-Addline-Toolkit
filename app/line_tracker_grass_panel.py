@@ -67,6 +67,7 @@ class GrassPanel:
         self.points: list[tuple[dt.date, int]] = []
         self.highlight_day: dt.date | None = None
         self.uncommitted_today = 0
+        self.layout_scale = 1.0
 
     def t(self, key: str, **kwargs) -> str:
         text = self.bindings.translate(key)
@@ -78,25 +79,76 @@ class GrassPanel:
     def theme(self) -> ThemePalette:
         return self.bindings.get_theme()
 
+    def _metrics(self) -> dict[str, int]:
+        scale = min(max(self.layout_scale, 0.55), 1.0)
+        cell_size = max(10, round(GRASS_CELL_SIZE * scale))
+        cell_gap = max(2, round(GRASS_CELL_GAP * scale))
+        outer_pad_x = max(12, round(GRASS_OUTER_PAD_X * scale))
+        outer_pad_y = max(10, round(GRASS_OUTER_PAD_Y * scale))
+        label_width = max(24, round(GRASS_LABEL_WIDTH * scale))
+        month_label_height = max(14, round(GRASS_MONTH_LABEL_HEIGHT * scale))
+        band_gap = max(22, round(GRASS_BAND_GAP * scale))
+        panel_pad_x = max(6, round(GRASS_PANEL_PAD_X * scale))
+        legend_swatch = max(10, round(GRASS_LEGEND_SWATCH * scale))
+        legend_gap_x = max(6, round(GRASS_LEGEND_GAP_X * scale))
+        label_font = max(8, round(9 * scale))
+        empty_font = max(9, round(10 * scale))
+        width = (
+            (outer_pad_x * 2)
+            + label_width
+            + (GRASS_WEEKS_PER_ROW * cell_size)
+            + ((GRASS_WEEKS_PER_ROW - 1) * cell_gap)
+        )
+        band_height = (GRASS_BAND_DAY_ROWS * cell_size) + ((GRASS_BAND_DAY_ROWS - 1) * cell_gap)
+        height = (
+            (outer_pad_y * 2)
+            + (month_label_height * GRASS_SPLIT_ROWS)
+            + (band_height * GRASS_SPLIT_ROWS)
+            + band_gap
+        )
+        return {
+            "cell_size": cell_size,
+            "cell_gap": cell_gap,
+            "outer_pad_x": outer_pad_x,
+            "outer_pad_y": outer_pad_y,
+            "label_width": label_width,
+            "month_label_height": month_label_height,
+            "band_gap": band_gap,
+            "panel_pad_x": panel_pad_x,
+            "legend_swatch": legend_swatch,
+            "legend_gap_x": legend_gap_x,
+            "width": width,
+            "height": height,
+            "band_height": band_height,
+            "label_font": label_font,
+            "empty_font": empty_font,
+        }
+
     def build(self, parent: ttk.Frame) -> None:
         parent.rowconfigure(3, weight=1)
+        metrics = self._metrics()
         self.legend_frame = ttk.Frame(parent, style="CardInner.TFrame")
-        self.legend_frame.grid(row=0, column=0, sticky="w", padx=GRASS_PANEL_PAD_X, pady=(4, 0))
+        self.legend_frame.grid(row=0, column=0, sticky="w", padx=metrics["panel_pad_x"], pady=(4, 0))
 
         palette = self.theme()
         self.canvas = tk.Canvas(
             parent,
-            width=GRASS_CANVAS_WIDTH,
-            height=GRASS_CANVAS_HEIGHT,
+            width=metrics["width"],
+            height=metrics["height"],
             bg=palette.card_bg,
             highlightthickness=1,
             highlightbackground=palette.border,
         )
-        self.canvas.grid(row=1, column=0, sticky="w", padx=GRASS_PANEL_PAD_X, pady=(10, 0))
+        self.canvas.grid(row=1, column=0, sticky="w", padx=metrics["panel_pad_x"], pady=(10, 0))
 
         self.summary_var = tk.StringVar(value="")
         self.summary_label = ttk.Label(parent, textvariable=self.summary_var, style="CardLabel.TLabel")
-        self.summary_label.grid(row=2, column=0, sticky="w", padx=GRASS_PANEL_PAD_X, pady=(12, 10))
+        self.summary_label.grid(row=2, column=0, sticky="w", padx=metrics["panel_pad_x"], pady=(12, 10))
+
+    def set_layout_scale(self, scale: float) -> None:
+        self.layout_scale = min(max(float(scale), 0.55), 1.0)
+        if hasattr(self, "canvas"):
+            self.refresh()
 
     def apply_theme(self) -> None:
         if hasattr(self, "canvas"):
@@ -121,6 +173,10 @@ class GrassPanel:
     def refresh(self) -> None:
         if not hasattr(self, "canvas"):
             return
+        metrics = self._metrics()
+        self.canvas.configure(width=metrics["width"], height=metrics["height"])
+        self.legend_frame.grid_configure(padx=metrics["panel_pad_x"])
+        self.summary_label.grid_configure(padx=metrics["panel_pad_x"])
 
         highlight_day = self.highlight_day or dt.date.today()
         uncommitted_today = self.uncommitted_today if highlight_day == dt.date.today() else 0
@@ -191,18 +247,19 @@ class GrassPanel:
     def _refresh_legend(self, uncommitted_today: int) -> None:
         if not hasattr(self, "legend_frame"):
             return
+        metrics = self._metrics()
 
         for child in self.legend_frame.winfo_children():
             child.destroy()
 
         for column, (color, label_text) in enumerate(self._legend_items(uncommitted_today)):
             item_frame = ttk.Frame(self.legend_frame, style="CardInner.TFrame")
-            item_frame.grid(row=0, column=column, sticky="w", padx=(0, GRASS_LEGEND_GAP_X))
+            item_frame.grid(row=0, column=column, sticky="w", padx=(0, metrics["legend_gap_x"]))
 
             swatch = tk.Frame(
                 item_frame,
-                width=GRASS_LEGEND_SWATCH,
-                height=GRASS_LEGEND_SWATCH,
+                width=metrics["legend_swatch"],
+                height=metrics["legend_swatch"],
                 bg=color,
                 highlightthickness=1,
                 highlightbackground=self.theme().border,
@@ -240,11 +297,19 @@ class GrassPanel:
         canvas = self.canvas
         palette = self.theme()
         canvas.delete("all")
-
-        width = GRASS_CANVAS_WIDTH
-        height = GRASS_CANVAS_HEIGHT
-        pitch = GRASS_CELL_SIZE + GRASS_CELL_GAP
-        band_height = (GRASS_BAND_DAY_ROWS * GRASS_CELL_SIZE) + ((GRASS_BAND_DAY_ROWS - 1) * GRASS_CELL_GAP)
+        metrics = self._metrics()
+        width = metrics["width"]
+        height = metrics["height"]
+        cell_size = metrics["cell_size"]
+        pitch = metrics["cell_size"] + metrics["cell_gap"]
+        band_height = metrics["band_height"]
+        outer_pad_x = metrics["outer_pad_x"]
+        outer_pad_y = metrics["outer_pad_y"]
+        label_width = metrics["label_width"]
+        month_label_height = metrics["month_label_height"]
+        band_gap = metrics["band_gap"]
+        label_font = ("Bahnschrift", metrics["label_font"])
+        empty_font = ("Bahnschrift", metrics["empty_font"])
 
         if not points:
             canvas.create_text(
@@ -252,7 +317,7 @@ class GrassPanel:
                 height / 2,
                 text=self.t("grass_empty"),
                 fill=palette.muted_text,
-                font=("Bahnschrift", 10),
+                font=empty_font,
             )
             return
 
@@ -274,10 +339,10 @@ class GrassPanel:
             )
 
         def band_month_y(band_index: int) -> int:
-            return GRASS_OUTER_PAD_Y + band_index * (band_height + GRASS_MONTH_LABEL_HEIGHT + GRASS_BAND_GAP)
+            return outer_pad_y + band_index * (band_height + month_label_height + band_gap)
 
         def band_grid_y(band_index: int) -> int:
-            return band_month_y(band_index) + GRASS_MONTH_LABEL_HEIGHT
+            return band_month_y(band_index) + month_label_height
 
         for band_index in range(GRASS_SPLIT_ROWS):
             month_y = band_month_y(band_index)
@@ -288,14 +353,14 @@ class GrassPanel:
                 (self.t("grass_day_wed"), 2),
                 (self.t("grass_day_fri"), 4),
             ):
-                label_y = grid_y + row * pitch + GRASS_CELL_SIZE / 2
+                label_y = grid_y + row * pitch + cell_size / 2
                 canvas.create_text(
-                    GRASS_OUTER_PAD_X,
+                    outer_pad_x,
                     label_y,
                     text=label_text,
                     anchor="w",
                     fill=palette.muted_text,
-                    font=("Bahnschrift", 9),
+                    font=label_font,
                 )
 
             previous_month: int | None = None
@@ -313,12 +378,12 @@ class GrassPanel:
                 month = visible_days[0].month
                 if col_in_band == 0 or month != previous_month:
                     canvas.create_text(
-                        GRASS_OUTER_PAD_X + GRASS_LABEL_WIDTH + col_in_band * pitch,
+                        outer_pad_x + label_width + col_in_band * pitch,
                         month_y,
                         text=self.bindings.format_month_label(month),
                         anchor="w",
                         fill=palette.muted_text,
-                        font=("Bahnschrift", 9),
+                        font=label_font,
                     )
                     previous_month = month
 
@@ -328,10 +393,10 @@ class GrassPanel:
             band_index = global_col // weeks_per_row
             col_in_band = global_col % weeks_per_row
             row = offset % 7
-            x1 = GRASS_OUTER_PAD_X + GRASS_LABEL_WIDTH + col_in_band * pitch
+            x1 = outer_pad_x + label_width + col_in_band * pitch
             y1 = band_grid_y(band_index) + row * pitch
-            x2 = x1 + GRASS_CELL_SIZE
-            y2 = y1 + GRASS_CELL_SIZE
+            x2 = x1 + cell_size
+            y2 = y1 + cell_size
             is_today = day == highlight_day
             committed_value = committed_values_by_day.get(day, value)
             fill_color = self._level_color(committed_value)

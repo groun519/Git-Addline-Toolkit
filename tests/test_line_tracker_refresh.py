@@ -13,12 +13,14 @@ from line_tracker_refresh import build_refresh_snapshot, get_grass_date_range
 
 
 class RefreshSnapshotTests(unittest.TestCase):
+    @patch("line_tracker_refresh.get_committed_deletions", side_effect=[2, 6, 2])
     @patch("line_tracker_refresh.get_uncommitted_deletions", return_value=4)
     @patch(
         "line_tracker_refresh.get_committed_insertions_by_date_combined",
         return_value={},
     )
     @patch("line_tracker_refresh.get_committed_insertions_for_date_combined", return_value=3)
+    @patch("line_tracker_refresh.get_total_deletions_up_to", return_value=12)
     @patch("line_tracker_refresh.get_total_insertions_up_to", return_value=60)
     @patch("line_tracker_refresh.resolve_base_commit", return_value="basehash")
     @patch("line_tracker_refresh.get_committed_insertions", side_effect=[5, 40, 20])
@@ -31,9 +33,11 @@ class RefreshSnapshotTests(unittest.TestCase):
         _mock_committed_insertions,
         _mock_base_commit,
         _mock_total_up_to,
+        _mock_total_deletions_up_to,
         _mock_for_date,
         mock_by_date,
         _mock_uncommitted_deletions,
+        _mock_committed_deletions,
     ) -> None:
         today = dt.date.today()
         result = TrackerResult(
@@ -70,6 +74,8 @@ class RefreshSnapshotTests(unittest.TestCase):
 
         self.assertEqual(snapshot.result, result)
         self.assertEqual(snapshot.branch_total, 5)
+        self.assertEqual(snapshot.branch_deletions, 2)
+        self.assertEqual(snapshot.overall_deletions, 20)
         self.assertEqual(snapshot.today_done, 10)
         self.assertEqual(snapshot.today_target, 10)
         self.assertEqual(snapshot.uncommitted_deletions, 4)
@@ -82,12 +88,14 @@ class RefreshSnapshotTests(unittest.TestCase):
         self.assertAlmostEqual(snapshot.graph_avg, 13 / 3)
         self.assertEqual(snapshot.share_text, "75.0%")
 
+    @patch("line_tracker_refresh.get_committed_deletions", side_effect=[2, 6, 2])
     @patch("line_tracker_refresh.get_uncommitted_deletions", return_value=0)
     @patch(
         "line_tracker_refresh.get_committed_insertions_by_date_combined",
         return_value={},
     )
     @patch("line_tracker_refresh.get_committed_insertions_for_date_combined", return_value=3)
+    @patch("line_tracker_refresh.get_total_deletions_up_to", return_value=12)
     @patch("line_tracker_refresh.get_total_insertions_up_to", return_value=60)
     @patch("line_tracker_refresh.resolve_base_commit", return_value="basehash")
     @patch("line_tracker_refresh.get_committed_insertions", side_effect=[5, 40, 20])
@@ -102,9 +110,11 @@ class RefreshSnapshotTests(unittest.TestCase):
         mock_committed_insertions,
         _mock_base_commit,
         _mock_total_up_to,
+        _mock_total_deletions_up_to,
         mock_for_date,
         mock_by_date,
         _mock_uncommitted_deletions,
+        _mock_committed_deletions,
     ) -> None:
         today = dt.date.today()
         result = TrackerResult(
@@ -133,6 +143,8 @@ class RefreshSnapshotTests(unittest.TestCase):
         snapshot = build_refresh_snapshot(Path("C:/repo"), "me", config, graph_days=3)
 
         self.assertEqual(snapshot.branch_total, 5)
+        self.assertEqual(snapshot.branch_deletions, 2)
+        self.assertEqual(snapshot.overall_deletions, 20)
         self.assertEqual(snapshot.today_done, 10)
         self.assertEqual(snapshot.share_text, "75.0%")
         mock_resolve_ref.assert_called_once_with(Path("C:/repo"), "auto")
