@@ -11,6 +11,10 @@ set "ICON_FILE=%ROOT%\assets\line_tracker.ico"
 set "APP_VERSION="
 set "PY_CMD="
 set "PY_ARGS="
+set "PY_EXE="
+set "PY_HOME="
+set "BUILD_VENV=%SCRIPT_DIR%\.build-venv"
+set "ORIGINAL_PATH=%PATH%"
 set "ISCC_CMD="
 
 pushd "%ROOT%" >nul
@@ -29,25 +33,51 @@ if not defined APP_VERSION (
 echo [Line Tracker %APP_VERSION%] Build Installer
 echo.
 
-py -3 -V >nul 2>nul
-if not errorlevel 1 (
-  set "PY_CMD=py"
-  set "PY_ARGS=-3"
+if exist "%ROOT%\.venv\Scripts\python.exe" set "PY_EXE=%ROOT%\.venv\Scripts\python.exe"
+
+if not defined PY_EXE if exist "%BUILD_VENV%\Scripts\python.exe" set "PY_EXE=%BUILD_VENV%\Scripts\python.exe"
+
+if not defined PY_EXE (
+  py -3 -V >nul 2>nul
+  if not errorlevel 1 (
+    set "PY_CMD=py"
+    set "PY_ARGS=-3"
+  )
 )
 
-if not defined PY_CMD (
-  python -V >nul 2>nul
-  if not errorlevel 1 set "PY_CMD=python"
-)
+if not defined PY_EXE (
+  if not defined PY_CMD (
+    python -V >nul 2>nul
+    if not errorlevel 1 set "PY_CMD=python"
+  )
 
-if not defined PY_CMD (
-  echo Python launcher ^(py^) or python not found.
-  echo Install Python 3.10+ and ensure one of them is available in PATH.
+  if not defined PY_CMD (
+    echo Python launcher ^(py^) or python not found.
+    echo Install Python 3.10+ and ensure one of them is available in PATH.
+    exit /b 1
+  )
+
+  echo Creating isolated build environment...
+  %PY_CMD% %PY_ARGS% -m venv "%BUILD_VENV%"
+  if errorlevel 1 exit /b 1
+  set "PY_EXE=%BUILD_VENV%\Scripts\python.exe"
+)
+for %%I in ("%PY_EXE%") do set "PY_HOME=%%~dpI"
+
+echo Installing build deps...
+"%PY_EXE%" -m pip install -r "%SCRIPT_DIR%\requirements-build.txt"
+if errorlevel 1 exit /b 1
+
+echo Verifying Qt runtime...
+"%PY_EXE%" -c "from PySide6 import QtCore; print('PySide6', QtCore.__version__)"
+if errorlevel 1 (
+  echo PySide6 runtime verification failed. Aborting build.
   exit /b 1
 )
 
+echo.
 echo Running test suite...
-%PY_CMD% %PY_ARGS% -m unittest discover -s tests -t . -v
+"%PY_EXE%" -m unittest discover -s tests -t . -v
 if errorlevel 1 (
   echo.
   echo Tests failed. Aborting build.
@@ -55,15 +85,13 @@ if errorlevel 1 (
 )
 
 echo.
-echo Installing build deps...
-%PY_CMD% %PY_ARGS% -m pip install -r "%SCRIPT_DIR%\requirements-build.txt"
-if errorlevel 1 exit /b 1
-
-echo.
 echo Building app with PyInstaller...
+rem Keep PyInstaller from collecting incompatible ICU DLLs from Anaconda or other PATH entries.
+set "PATH=%PY_HOME%;%SystemRoot%\System32;%SystemRoot%;%SystemRoot%\System32\Wbem;%SystemRoot%\System32\WindowsPowerShell\v1.0"
 if exist "%ICON_FILE%" (
-  %PY_CMD% %PY_ARGS% -m PyInstaller --noconfirm --clean --noconsole ^
+  "%PY_EXE%" -m PyInstaller --noconfirm --clean --noconsole ^
     --name "LineTracker" ^
+    --exclude-module tkinter ^
     --icon "%ICON_FILE%" ^
     --add-data "%ROOT%\VERSION;." ^
     --add-data "%ROOT%\assets;assets" ^
@@ -72,8 +100,9 @@ if exist "%ICON_FILE%" (
     --specpath "%BUILD_ROOT%" ^
     "%ROOT%\app\line_tracker_ui.pyw"
 ) else (
-  %PY_CMD% %PY_ARGS% -m PyInstaller --noconfirm --clean --noconsole ^
+  "%PY_EXE%" -m PyInstaller --noconfirm --clean --noconsole ^
     --name "LineTracker" ^
+    --exclude-module tkinter ^
     --add-data "%ROOT%\VERSION;." ^
     --distpath "%DIST_ROOT%" ^
     --workpath "%BUILD_ROOT%" ^
@@ -85,7 +114,7 @@ if errorlevel 1 exit /b 1
 echo.
 echo Building CLI with PyInstaller...
 if exist "%ICON_FILE%" (
-  %PY_CMD% %PY_ARGS% -m PyInstaller --noconfirm --clean --onefile ^
+  "%PY_EXE%" -m PyInstaller --noconfirm --clean --onefile ^
     --name "LineTrackerCli" ^
     --icon "%ICON_FILE%" ^
     --distpath "%DIST_ROOT%" ^
@@ -93,7 +122,7 @@ if exist "%ICON_FILE%" (
     --specpath "%BUILD_ROOT%" ^
     "%ROOT%\app\line_tracker.py"
 ) else (
-  %PY_CMD% %PY_ARGS% -m PyInstaller --noconfirm --clean --onefile ^
+  "%PY_EXE%" -m PyInstaller --noconfirm --clean --onefile ^
     --name "LineTrackerCli" ^
     --distpath "%DIST_ROOT%" ^
     --workpath "%BUILD_ROOT%\cli" ^
@@ -101,6 +130,13 @@ if exist "%ICON_FILE%" (
     "%ROOT%\app\line_tracker.py"
 )
 if errorlevel 1 exit /b 1
+set "PATH=%ORIGINAL_PATH%"
+
+if exist "%DIST_ROOT%\LineTracker\_internal\icuuc.dll" (
+  echo Unexpected ICU DLL was bundled with the Qt app.
+  echo Check PATH for Anaconda or another third-party ICU installation.
+  exit /b 1
+)
 
 if exist "%PORTABLE_GIT_DST%" (
   echo Removing stale PortableGit bundle...

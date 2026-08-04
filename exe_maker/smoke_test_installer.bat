@@ -10,6 +10,7 @@ set "INSTALL_DIR="
 set "APP_EXE="
 set "CLI_EXE="
 set "SETUP_CHECK="
+set "UNINSTALL_EXE="
 set "APP_PID="
 
 if not defined INSTALLER set "INSTALLER=%SCRIPT_DIR%\dist\LineTrackerSetup.exe"
@@ -42,6 +43,7 @@ if errorlevel 1 (
 set "APP_EXE=%INSTALL_DIR%\LineTracker.exe"
 set "CLI_EXE=%INSTALL_DIR%\LineTrackerCli.exe"
 set "SETUP_CHECK=%INSTALL_DIR%\setup\setup_check.bat"
+set "UNINSTALL_EXE=%INSTALL_DIR%\unins000.exe"
 
 if not exist "%APP_EXE%" (
   echo Installed app not found: "%APP_EXE%"
@@ -50,6 +52,11 @@ if not exist "%APP_EXE%" (
 
 if not exist "%SETUP_CHECK%" (
   echo Setup check file not found: "%SETUP_CHECK%"
+  exit /b 1
+)
+
+if not exist "%UNINSTALL_EXE%" (
+  echo Uninstaller not found: "%UNINSTALL_EXE%"
   exit /b 1
 )
 
@@ -67,7 +74,7 @@ if exist "%CLI_EXE%" (
     exit /b 1
   )
 
-  C:\Windows\System32\timeout.exe /t 5 /nobreak >nul
+  C:\Windows\System32\ping.exe -n 6 127.0.0.1 >nul
 
   call :find_app_pid
   if defined APP_PID (
@@ -80,11 +87,17 @@ if exist "%CLI_EXE%" (
   )
 )
 
-C:\Windows\System32\timeout.exe /t 1 /nobreak >nul
-echo Cleaning smoke install...
-rmdir /s /q "%INSTALL_DIR%"
+echo Running silent uninstall...
+start "" /wait "%UNINSTALL_EXE%" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+if errorlevel 1 (
+  echo Silent uninstall failed.
+  exit /b 1
+)
+
+C:\Windows\System32\ping.exe -n 3 127.0.0.1 >nul
 if exist "%INSTALL_DIR%" (
-  echo Warning: smoke install dir not removed: "%INSTALL_DIR%"
+  echo Installed files remain after uninstall: "%INSTALL_DIR%"
+  exit /b 1
 )
 
 echo.

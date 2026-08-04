@@ -6,53 +6,26 @@ from dataclasses import dataclass
 from tkinter import ttk
 from typing import Callable
 
+from line_tracker_grass import (
+    GRASS_BAND_DAY_ROWS,
+    GRASS_BAND_GAP,
+    GRASS_CANVAS_HEIGHT,
+    GRASS_CANVAS_WIDTH,
+    GRASS_CELL_GAP,
+    GRASS_CELL_SIZE,
+    GRASS_FIXED_LEVEL_BANDS,
+    GRASS_LABEL_WIDTH,
+    GRASS_LEGEND_GAP_X,
+    GRASS_LEGEND_SWATCH,
+    GRASS_MONTH_LABEL_HEIGHT,
+    GRASS_OUTER_PAD_X,
+    GRASS_OUTER_PAD_Y,
+    GRASS_PANEL_PAD_X,
+    GRASS_SPLIT_ROWS,
+    GRASS_UNCOMMITTED_LEVEL_COLORS,
+    GRASS_WEEKS_PER_ROW,
+)
 from line_tracker_theme import ThemePalette
-
-
-GRASS_SPLIT_ROWS = 2
-GRASS_CELL_SIZE = 15
-GRASS_CELL_GAP = 5
-GRASS_BAND_DAY_ROWS = 7
-GRASS_BAND_GAP = 36
-GRASS_OUTER_PAD_X = 18
-GRASS_OUTER_PAD_Y = 16
-GRASS_LABEL_WIDTH = 30
-GRASS_MONTH_LABEL_HEIGHT = 18
-GRASS_WEEKS_PER_ROW = 27
-GRASS_PANEL_PAD_X = 8
-GRASS_LEGEND_SWATCH = 12
-GRASS_LEGEND_GAP_X = 10
-GRASS_FIXED_LEVEL_BANDS = (
-    (1, 99),
-    (100, 299),
-    (300, 699),
-    (700, None),
-)
-GRASS_UNCOMMITTED_LEVEL_COLORS = (
-    "#a9c3ff",
-    "#7ea6ff",
-    "#4d86f0",
-    "#2f63cf",
-)
-GRASS_CANVAS_WIDTH = (
-    (GRASS_OUTER_PAD_X * 2)
-    + GRASS_LABEL_WIDTH
-    + (GRASS_WEEKS_PER_ROW * GRASS_CELL_SIZE)
-    + ((GRASS_WEEKS_PER_ROW - 1) * GRASS_CELL_GAP)
-)
-GRASS_CANVAS_HEIGHT = (
-    (GRASS_OUTER_PAD_Y * 2)
-    + (GRASS_MONTH_LABEL_HEIGHT * GRASS_SPLIT_ROWS)
-    + (
-        (
-            (GRASS_BAND_DAY_ROWS * GRASS_CELL_SIZE)
-            + ((GRASS_BAND_DAY_ROWS - 1) * GRASS_CELL_GAP)
-        )
-        * GRASS_SPLIT_ROWS
-    )
-    + GRASS_BAND_GAP
-)
-
 
 @dataclass(frozen=True)
 class GrassPanelBindings:

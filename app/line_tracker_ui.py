@@ -4,56 +4,110 @@ from __future__ import annotations
 import argparse
 import calendar
 import datetime as dt
-import json
 import math
+import os
 import re
 import sys
 import threading
 import tkinter as tk
 import webbrowser
-from dataclasses import dataclass
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from line_tracker_memo import (
-    MemoLabels,
-    coerce_saved_memo_text,
-    default_memo_text,
-    get_placeholder_titles,
+from line_tracker_args import make_ui_parser, parse_date as parse_ui_date
+from line_tracker_authors import (
+    build_author_option_entries,
+    parse_author_identity,
+    parse_shortlog_identities,
 )
-from line_tracker_memo_panel import MemoPanel, MemoPanelBindings
+from line_tracker_controller import RefreshCoordinator
+from line_tracker_graph import (
+    flatten_graph_points as flatten_graph_screen_points,
+    smooth_graph_points as smooth_graph_screen_points,
+    summarize_graph_values as summarize_graph_point_values,
+)
 from line_tracker_grass_panel import GrassPanel, GrassPanelBindings
+from line_tracker_presenters import (
+    build_progress_presentation,
+    format_progress_percent as format_progress_percent_value,
+)
+from line_tracker_repository import resolve_valid_repo
+from line_tracker_schedule import (
+    DirectiveScheduleParser,
+    load_schedule_document,
+    make_portable_schedule_path,
+    resolve_schedule_path,
+)
+from line_tracker_schedule_panel import SchedulePanel, SchedulePanelBindings
+from line_tracker_scroll_panel import ScrollPanel
 from line_tracker import (
+    CommitChangeEntry,
     DEFAULT_AUTHOR,
     DEFAULT_BASE_COMMIT,
     DEFAULT_BASE_TOTAL,
     DEFAULT_GOAL,
+    LANGUAGE_EXTENSION_GROUPS,
     TrackerConfig,
     TrackerResult,
     compute_metrics,
     format_output_lines,
     get_app_state_path,
     get_legacy_state_path,
+    get_commit_change_entries,
     clear_cache_for_repo,
-    encode_author_patterns,
     find_repo_root,
     get_git_info,
     run_git,
     resolve_author,
+    resolve_base_commit,
     resolve_current_ref,
     resolve_ref,
 )
 from line_tracker_theme import (
-    DEFAULT_THEME_NAME,
     ThemePalette,
     get_theme_names,
     get_theme_palette,
     resolve_theme_name,
 )
-from line_tracker_refresh import RefreshSnapshot, build_refresh_snapshot
+from line_tracker_refresh import RefreshSnapshot
+from line_tracker_settings import (
+    COMPACT_WINDOW_ALPHA,
+    COMPACT_WINDOW_ALPHA_MAX,
+    COMPACT_WINDOW_ALPHA_MIN,
+    GRAPH_CURVE_DEFAULT,
+    SETTINGS_FILE_NAME,
+    UISettings,
+    load_ui_settings,
+    save_ui_settings,
+)
+from line_tracker_ui_resources import (
+    FONT_BODY,
+    FONT_CHIP,
+    FONT_COMPACT_BAR_VALUE,
+    FONT_COMPACT_CLOCK,
+    FONT_COMPACT_META,
+    FONT_COMPACT_TOOL,
+    FONT_COMPACT_VALUE,
+    FONT_MONO,
+    FONT_SECTION,
+    FONT_SUBTITLE,
+    FONT_TILE_LABEL,
+    FONT_TILE_VALUE,
+    FONT_TITLE,
+    FONT_VERSION,
+    LANG_DISPLAY,
+    LANG_OPTIONS,
+    TEXT,
+    _hex_to_colorref,
+    LayoutMetrics,
+    build_layout_metrics,
+    blend_hex,
+    contrast_text_color,
+)
 from line_tracker_version import APP_VERSION, format_app_title
 
 AUTO_REFRESH_MS = 60_000
+SCHEDULE_POLL_MS = 1_500
 GRAPH_CANVAS_WIDTH = 420
 GRAPH_CANVAS_HEIGHT = 140
 BAR_LENGTH = 420
@@ -65,10 +119,9 @@ COMPACT_WINDOW_MIN_HEIGHT = 156
 COMPACT_STRIP_MIN_WIDTH = 300
 COMPACT_STRIP_MIN_HEIGHT = 42
 COMPACT_WINDOW_MARGIN = 0
-COMPACT_WINDOW_ALPHA = 0.88
-COMPACT_WINDOW_ALPHA_MIN = 0.45
-COMPACT_WINDOW_ALPHA_MAX = 1.0
 COMPACT_LAUNCH_BUTTON_SIZE = 32
+GRAPH_SETTINGS_BUTTON_SIZE = 28
+APP_SETTINGS_BUTTON_SIZE = 32
 CUSTOM_TITLEBAR_HEIGHT = 34
 CARD_SCROLLBAR_STYLE = "Card.Vertical.TScrollbar"
 FOOTER_LOADING_STYLE = "Loading.Horizontal.TProgressbar"
@@ -78,270 +131,15 @@ MIN_WINDOW_WIDTH = 1100
 MIN_WINDOW_HEIGHT = 675
 BASE_TILE_MIN_WIDTH = 250
 BASE_TILE_LABEL_WRAP = 240
-SETTINGS_FILE_NAME = "line_tracker_ui_settings.json"
 WINDOW_SCREEN_MARGIN = 80
 WINDOW_FIT_SAFETY = 24
+LEFT_PANEL_SCROLLBAR_ALLOWANCE = 18
 GEOMETRY_RE = re.compile(r"^(?P<width>\d+)x(?P<height>\d+)(?:(?P<x>[+-]\d+)(?P<y>[+-]\d+))?$")
-AUTHOR_IDENTITY_RE = re.compile(r"^(?P<name>.+?)\s*<(?P<email>[^<>]+)>$")
-AUTHOR_HANDLE_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$")
-GITHUB_NOREPLY_DOMAIN = "users.noreply.github.com"
 RESPONSIVE_REPO_ENTRY_WIDTH = 52
-
-LANG_OPTIONS = {"한국어": "ko", "English": "en"}
-LANG_DISPLAY = {"ko": "한국어", "en": "English"}
-TEXT = {
-    "ko": {
-        "window_title": "Line Tracker",
-        "lang_label": "언어",
-        "theme_label": "테마",
-        "theme_forest": "포레스트",
-        "theme_cream": "크림",
-        "theme_slate": "슬레이트",
-        "theme_dark": "다크",
-        "theme_harddark": "하드다크",
-        "theme_vs": "VS",
-        "theme_neon": "네온",
-        "theme_cherry": "체리",
-        "theme_discord": "디스코드",
-        "theme_mc": "MC",
-        "theme_cyberpunk": "사이버펑크",
-        "repo_label": "리포 경로",
-        "repo_select": "리포 선택",
-        "graph_title": "일별 추가줄 그래프",
-        "graph_period": "기간",
-        "commit_memo": "커밋 메모",
-        "tab_memo": "커밋 메모",
-        "tab_grass": "Git 잔디",
-        "memo_editor": "메모 원문",
-        "memo_preview": "자동 분리 미리보기",
-        "memo_hint": "첫 줄은 제목, 나머지는 DONE/TODO 항목으로 자동 분리됩니다.",
-        "memo_template_title": "[제목 입력]",
-        "memo_title": "제목",
-        "memo_empty": "(비어 있음)",
-        "done": "DONE",
-        "todo": "TODO",
-        "move_to_done": "DONE로 이동",
-        "move_to_todo": "TODO로 이동",
-        "copy_summary": "제목 복사",
-        "copy_description": "설명 복사",
-        "grass_hint": "칸 하나가 하루입니다. 진할수록 그날 추가한 줄 수가 많고, 테두리는 오늘입니다.",
-        "grass_summary": "활동 {active}일 | 총 {total}줄 | 평균 {avg}줄/활동일",
-        "grass_empty": "표시할 기록이 없습니다.",
-        "grass_day_mon": "월",
-        "grass_day_wed": "수",
-        "grass_day_fri": "금",
-        "grass_legend_zero": "0줄",
-        "grass_legend_range": "{start}~{end}줄",
-        "grass_legend_open": "{start}줄+",
-        "grass_uncommitted_legend": "오늘",
-        "settings": "설정",
-        "custom_date": "커스텀 날짜 사용",
-        "apply_date": "날짜 적용",
-        "goal_label": "목표 줄수",
-        "apply_goal": "목표 적용",
-        "author_label": "유저 선택",
-        "apply_author": "유저 적용",
-        "author_auto": "자동(내 계정)",
-        "author_all": "전체",
-        "auto_refresh": "1분마다 자동 업데이트",
-        "progress": "진행률",
-        "overall_progress": "전체 진행률",
-        "daily_progress": "일일 진행률",
-        "current_changes": "현재 변경",
-        "daily_stats_section": "일일 통계",
-        "branch_stats_section": "브랜치 통계",
-        "overall_stats_section": "전체 통계",
-        "refresh": "새로고침",
-        "copy": "복사",
-        "compact_toggle": "축소",
-        "compact_toggle_short": "축소",
-        "compact_restore": "복원",
-        "compact_title": "축소 모드",
-        "compact_mode_to_strip": "최소화",
-        "compact_mode_to_card": "카드",
-        "compact_opacity": "투명도",
-        "compact_opacity_value": "{value}",
-        "compact_today_progress": "오늘 진행",
-        "compact_progress_complete": "오늘 목표 달성",
-        "compact_progress_value_text": "{percent}% ({done}/{target})",
-        "compact_progress_inline_complete": "달성",
-        "compact_progress_inline_text": "{percent}% · {done}/{target}",
-        "compact_progress_remaining": "{remaining}줄 남음",
-        "compact_progress_over": "목표 초과 +{extra}줄",
-        "compact_delta": "추가줄",
-        "compact_clock": "날짜 및 시간",
-        "compact_datetime_text": "{date} | {time}",
-        "compact_refresh_short": "새로고침",
-        "compact_restore_short": "복원",
-        "loading": "새로고침 중...",
-        "loading_detail": "사용자 정보를 불러오는 중...",
-        "status_updated": "업데이트: {time}",
-        "status_auto_suffix": " (자동 1분 ON)",
-        "status_clipboard": "클립보드에 복사됨",
-        "status_summary_copied": "커밋 제목이 클립보드에 복사됨",
-        "status_description_copied": "커밋 설명이 클립보드에 복사됨",
-        "status_error": "오류 발생",
-        "status_auto_off": "자동 업데이트 OFF",
-        "status_repo_needed": "리포 경로를 선택한 뒤 새로고침하세요.",
-        "error_date_format": "날짜 형식은 YYYY-MM-DD 로 입력하세요.",
-        "error_goal": "목표 줄수는 1 이상의 정수로 입력하세요.",
-        "error_repo_missing": "리포 경로가 존재하지 않습니다.",
-        "error_repo_invalid": "유효한 Git 리포가 아닙니다.",
-        "error_need_title": "제목을 입력하세요.",
-        "repo_not_selected": "리포 미선택",
-        "today_label": "오늘 날짜",
-        "days_left_label": "남은 날짜({month})",
-        "day_suffix": "일",
-        "daily_required_label": "일일 필요 추가줄",
-        "after_commit_prefix": "커밋 후",
-        "after_commit_daily_label": "커밋 후 일일 필요 추가줄",
-        "per_day_suffix": "줄/일",
-        "current_uncommitted_label": "현재 추가줄(미커밋)",
-        "lines_suffix": "줄",
-        "branch_only_label": "현재 브랜치 단독 추가줄(커밋)",
-        "share_label": "내 추가줄 비중(전체 대비)",
-        "progress_breakdown": "메인 {main} + 브랜치 {branch} + 미커밋 {uncommitted}",
-        "overall_progress_text": "전체 진행률(커밋+미커밋): {current}/{goal} ({percent}%)\n{breakdown}",
-        "daily_progress_text": "일일 진행률: {done}/{target} ({percent}%)",
-        "graph_summary": "최근 {days}일 평균 {avg}줄/일 | 최대 {max}줄",
-        "repo_dialog_title": "리포 선택",
-        "setup_title": "환경 점검",
-        "git_missing": "Git을 찾을 수 없습니다.\nGit for Windows를 설치하거나, 설치본에 PortableGit을 함께 포함하세요.\n지금 다운로드 페이지를 여시겠습니까?",
-    },
-    "en": {
-        "window_title": "Line Tracker",
-        "lang_label": "Language",
-        "theme_label": "Theme",
-        "theme_forest": "Forest",
-        "theme_cream": "Cream",
-        "theme_slate": "Slate",
-        "theme_dark": "Dark",
-        "theme_harddark": "Hard Dark",
-        "theme_vs": "VS",
-        "theme_neon": "Neon",
-        "theme_cherry": "Cherry",
-        "theme_discord": "Discord",
-        "theme_mc": "MC",
-        "theme_cyberpunk": "Cyberpunk",
-        "repo_label": "Repository",
-        "repo_select": "Browse",
-        "graph_title": "Daily Additions Graph",
-        "graph_period": "Range",
-        "commit_memo": "Commit Memo",
-        "tab_memo": "Commit Memo",
-        "tab_grass": "Git Grass",
-        "memo_editor": "Memo Text",
-        "memo_preview": "Parsed Preview",
-        "memo_hint": "The first line becomes the title. Remaining lines are split into DONE/TODO items.",
-        "memo_template_title": "[Enter title]",
-        "memo_title": "Title",
-        "memo_empty": "(Empty)",
-        "done": "DONE",
-        "todo": "TODO",
-        "move_to_done": "Move to DONE",
-        "move_to_todo": "Move to TODO",
-        "copy_summary": "Copy Summary",
-        "copy_description": "Copy Description",
-        "grass_hint": "Each cell is a day. Darker cells mean more added lines, and the outline marks today.",
-        "grass_summary": "{active} active days | {total} total lines | {avg} avg lines/active day",
-        "grass_empty": "No history to display.",
-        "grass_day_mon": "Mon",
-        "grass_day_wed": "Wed",
-        "grass_day_fri": "Fri",
-        "grass_legend_zero": "0 lines",
-        "grass_legend_range": "{start}-{end} lines",
-        "grass_legend_open": "{start}+ lines",
-        "grass_uncommitted_legend": "Today",
-        "settings": "Settings",
-        "custom_date": "Use Custom Date",
-        "apply_date": "Apply Date",
-        "goal_label": "Goal Lines",
-        "apply_goal": "Apply Goal",
-        "author_label": "User",
-        "apply_author": "Apply User",
-        "author_auto": "Auto (me)",
-        "author_all": "All",
-        "auto_refresh": "Auto refresh (1 min)",
-        "progress": "Progress",
-        "overall_progress": "Overall Progress",
-        "daily_progress": "Daily Progress",
-        "current_changes": "Current Changes",
-        "daily_stats_section": "Daily Stats",
-        "branch_stats_section": "Branch Stats",
-        "overall_stats_section": "Overall Stats",
-        "refresh": "Refresh",
-        "copy": "Copy",
-        "compact_toggle": "Compact",
-        "compact_toggle_short": "Compact",
-        "compact_restore": "Restore",
-        "compact_title": "Compact Mode",
-        "compact_mode_to_strip": "Minimize",
-        "compact_mode_to_card": "Card",
-        "compact_opacity": "Opacity",
-        "compact_opacity_value": "{value}",
-        "compact_today_progress": "Today's Status",
-        "compact_progress_complete": "Goal complete today",
-        "compact_progress_value_text": "{percent}% ({done}/{target})",
-        "compact_progress_inline_complete": "Done",
-        "compact_progress_inline_text": "{percent}% · {done}/{target}",
-        "compact_progress_remaining": "{remaining} lines left",
-        "compact_progress_over": "Exceeded by +{extra} lines",
-        "compact_delta": "Delta",
-        "compact_clock": "Date & Time",
-        "compact_datetime_text": "{date} | {time}",
-        "compact_refresh_short": "Refresh",
-        "compact_restore_short": "Restore",
-        "loading": "Refreshing...",
-        "loading_detail": "Loading user information...",
-        "status_updated": "Updated: {time}",
-        "status_auto_suffix": " (auto 1 min ON)",
-        "status_clipboard": "Copied to clipboard",
-        "status_summary_copied": "Commit summary copied to clipboard",
-        "status_description_copied": "Commit description copied to clipboard",
-        "status_error": "Error",
-        "status_auto_off": "Auto refresh OFF",
-        "status_repo_needed": "Choose a repository path, then refresh.",
-        "error_date_format": "Date must be YYYY-MM-DD.",
-        "error_goal": "Goal lines must be a positive integer.",
-        "error_repo_missing": "Repository path does not exist.",
-        "error_repo_invalid": "Not a valid Git repository.",
-        "error_need_title": "Please enter a title.",
-        "repo_not_selected": "No repository selected",
-        "today_label": "Today",
-        "days_left_label": "Days left ({month})",
-        "day_suffix": " days",
-        "daily_required_label": "Daily required additions",
-        "after_commit_prefix": "After commit",
-        "after_commit_daily_label": "Daily required (after commit)",
-        "per_day_suffix": " lines/day",
-        "current_uncommitted_label": "Current additions (uncommitted)",
-        "lines_suffix": " lines",
-        "branch_only_label": "Current branch additions (committed)",
-        "share_label": "My additions share",
-        "progress_breakdown": "Main {main} + Branch {branch} + Uncommitted {uncommitted}",
-        "overall_progress_text": "Overall progress (committed+uncommitted): {current}/{goal} ({percent}%)\n{breakdown}",
-        "daily_progress_text": "Daily progress: {done}/{target} ({percent}%)",
-        "graph_summary": "Last {days} days avg {avg} lines/day | max {max} lines",
-        "repo_dialog_title": "Select Repository",
-        "setup_title": "Environment Check",
-        "git_missing": "Git was not found.\nInstall Git for Windows or bundle PortableGit with the app.\nOpen the download page now?",
-    },
-}
-
-FONT_TITLE = ("Bahnschrift", 18, "bold")
-FONT_VERSION = ("Bahnschrift", 9)
-FONT_SUBTITLE = ("Bahnschrift", 10)
-FONT_BODY = ("Bahnschrift", 10)
-FONT_SECTION = ("Bahnschrift", 11, "bold")
-FONT_COMPACT_VALUE = ("Bahnschrift", 14, "bold")
-FONT_COMPACT_TOOL = ("Bahnschrift", 9)
-FONT_COMPACT_CLOCK = ("Bahnschrift", 11)
-FONT_TILE_LABEL = ("Bahnschrift", 9)
-FONT_TILE_VALUE = ("Bahnschrift", 12, "bold")
-FONT_CHIP = ("Bahnschrift", 9)
-FONT_COMPACT_META = ("Bahnschrift", 10)
-FONT_COMPACT_BAR_VALUE = ("Bahnschrift", 9, "bold")
-FONT_MONO = ("Cascadia Mono", 10)
+GRAPH_DAY_OPTIONS = ("7", "14", "21", "30", "60", "90", "180")
+COMMIT_HISTORY_PAGE_SIZE = 20
+PROGRESS_BAR_HEIGHT = 18
+PROJECT_LANGUAGE_ORDER = tuple(language for language, _ in LANGUAGE_EXTENSION_GROUPS) + ("Other",)
 
 
 def get_app_icon_path() -> Path | None:
@@ -356,142 +154,21 @@ def get_app_icon_path() -> Path | None:
     return None
 
 
-@dataclass(frozen=True)
-class UISettings:
-    repo_path: str = ""
-    lang: str = "ko"
-    theme: str = DEFAULT_THEME_NAME
-    geometry: str = ""
-    goal: object = None
-    graph_days: str = "14"
-    author: str = ""
-    author_display: str = ""
-    custom_today_enabled: object = None
-    custom_today: str = ""
-    auto_refresh: object = False
-    memo_text: object = None
-    compact_variant: str = "card"
-    compact_alpha: float = COMPACT_WINDOW_ALPHA
-    legacy_note_title: str = ""
-    legacy_note_items: object = None
-    legacy_note_done: str = ""
-    legacy_note_todo: str = ""
-
-    @classmethod
-    def from_dict(cls, data: dict[str, object]) -> UISettings:
-        compact_alpha_raw = data.get("compact_alpha", COMPACT_WINDOW_ALPHA)
-        try:
-            compact_alpha = float(compact_alpha_raw)
-        except (TypeError, ValueError):
-            compact_alpha = COMPACT_WINDOW_ALPHA
-        if compact_alpha > 1.0:
-            compact_alpha /= 100.0
-        compact_alpha = min(max(compact_alpha, COMPACT_WINDOW_ALPHA_MIN), COMPACT_WINDOW_ALPHA_MAX)
-        return cls(
-            repo_path=str(data.get("repo_path", "")).strip(),
-            lang=str(data.get("lang", "ko")).strip() or "ko",
-            theme=resolve_theme_name(str(data.get("theme", DEFAULT_THEME_NAME)).strip()),
-            geometry=str(data.get("geometry", "")).strip(),
-            goal=data.get("goal"),
-            graph_days=str(data.get("graph_days", "14")),
-            author=str(data.get("author", "")).strip(),
-            author_display=str(data.get("author_display", "")).strip(),
-            custom_today_enabled=data.get("custom_today_enabled"),
-            custom_today=str(data.get("custom_today", "")).strip(),
-            auto_refresh=data.get("auto_refresh", False),
-            memo_text=data.get("memo_text"),
-            compact_variant="strip" if str(data.get("compact_variant", "card")).strip() == "strip" else "card",
-            compact_alpha=compact_alpha,
-            legacy_note_title=str(data.get("note_title", "")).strip(),
-            legacy_note_items=data.get("note_items"),
-            legacy_note_done=str(data.get("note_done", "")),
-            legacy_note_todo=str(data.get("note_todo", "")),
-        )
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "goal": self.goal,
-            "custom_today_enabled": self.custom_today_enabled,
-            "custom_today": self.custom_today,
-            "graph_days": self.graph_days,
-            "auto_refresh": self.auto_refresh,
-            "author": self.author,
-            "author_display": self.author_display,
-            "memo_text": self.memo_text,
-            "compact_variant": self.compact_variant,
-            "compact_alpha": round(self.compact_alpha, 2),
-            "repo_path": self.repo_path,
-            "lang": self.lang,
-            "theme": self.theme,
-            "geometry": self.geometry,
-        }
-
-
-def _hex_to_rgb(value: str) -> tuple[int, int, int]:
-    cleaned = value.strip().lstrip("#")
-    if len(cleaned) != 6:
-        raise ValueError(f"Expected #RRGGBB color, got {value!r}")
-    return tuple(int(cleaned[index:index + 2], 16) for index in (0, 2, 4))
-
-
-def blend_hex(base: str, overlay: str, ratio: float) -> str:
-    mix_ratio = min(max(ratio, 0.0), 1.0)
-    base_rgb = _hex_to_rgb(base)
-    overlay_rgb = _hex_to_rgb(overlay)
-    blended = tuple(
-        round(base_channel + (overlay_channel - base_channel) * mix_ratio)
-        for base_channel, overlay_channel in zip(base_rgb, overlay_rgb)
-    )
-    return "#" + "".join(f"{channel:02x}" for channel in blended)
-
-
-def contrast_text_color(background: str) -> str:
-    red, green, blue = _hex_to_rgb(background)
-    luminance = ((red * 299) + (green * 587) + (blue * 114)) / 1000
-    return "#10161c" if luminance >= 150 else "#f5f8fb"
-
-
-def _hex_to_colorref(value: str) -> int:
-    red, green, blue = _hex_to_rgb(value)
-    return red | (green << 8) | (blue << 16)
-
-
 def parse_date(value: str) -> dt.date:
-    return dt.date.fromisoformat(value)
+    return parse_ui_date(value)
 
 def make_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="UI launcher for monthly insertion-line tracker.")
-    parser.add_argument("--repo", default=".", help="Git repository path.")
-    parser.add_argument("--goal", type=int, default=DEFAULT_GOAL, help="Target total insertion lines.")
-    parser.add_argument("--base-total", type=int, default=DEFAULT_BASE_TOTAL, help="Committed total at base commit.")
-    parser.add_argument("--base-commit", default=DEFAULT_BASE_COMMIT, help="Base commit hash for line tracking.")
-    parser.add_argument("--author", default=DEFAULT_AUTHOR, help="Author filter for committed insertions.")
-    parser.add_argument("--ref", default="auto", help="Git ref/branch to track.")
-    parser.add_argument("--today", type=parse_date, default=None, help="Override today's date (YYYY-MM-DD).")
-    parser.add_argument("--month-end", type=parse_date, default=None, help="Month end date (YYYY-MM-DD).")
-    parser.add_argument(
-        "--once",
-        action="store_true",
-        help="Print the 4-line output once and exit (for quick checks).",
-    )
-    return parser
+    return make_ui_parser()
 
 
 class LineTrackerApp:
     @staticmethod
     def resolve_valid_repo(path: Path) -> Path | None:
-        try:
-            candidate = find_repo_root(path).resolve()
-        except OSError:
-            return None
-        try:
-            run_git(candidate, ["rev-parse", "--is-inside-work-tree"])
-        except RuntimeError:
-            return None
-        return candidate
+        return resolve_valid_repo(path)
 
-    def __init__(self, root: tk.Tk, args: argparse.Namespace) -> None:
+    def __init__(self, root: tk.Tk, args: argparse.Namespace, *, capture_mode: bool = False) -> None:
         self.root = root
+        self.capture_mode = capture_mode
         self.use_custom_titlebar = sys.platform == "win32"
         self.content_row = 1 if self.use_custom_titlebar else 0
         self.custom_titlebar_drag_x = 0
@@ -537,22 +214,24 @@ class LineTrackerApp:
 
         saved_goal = self._coerce_positive_int(self.settings.goal, self.goal)
         saved_graph_days = self.settings.graph_days
-        if saved_graph_days not in {"7", "14", "21", "30", "60", "90", "180"}:
+        if saved_graph_days not in GRAPH_DAY_OPTIONS:
             saved_graph_days = "14"
+        saved_graph_show_additions = bool(self.settings.graph_show_additions if self.settings.graph_show_additions is not None else True)
+        saved_graph_show_deletions = bool(self.settings.graph_show_deletions)
+        saved_graph_show_commits = bool(self.settings.graph_show_commits)
+        if not (saved_graph_show_additions or saved_graph_show_deletions or saved_graph_show_commits):
+            saved_graph_show_additions = True
+        try:
+            saved_graph_curve = float(self.settings.graph_curve)
+        except (TypeError, ValueError):
+            saved_graph_curve = GRAPH_CURVE_DEFAULT
+        saved_graph_curve = min(max(saved_graph_curve, 0.0), 100.0)
         saved_author = self.settings.author or args.author
         saved_author_display = self.settings.author_display
         saved_custom_today_enabled = bool(self.settings.custom_today_enabled if self.settings.custom_today_enabled is not None else bool(args.today))
         default_today_text = args.today.isoformat() if args.today else dt.date.today().isoformat()
         saved_today_text = self.settings.custom_today or default_today_text
         saved_auto_refresh = bool(self.settings.auto_refresh)
-        saved_memo_text = coerce_saved_memo_text(
-            self.settings.memo_text,
-            self.settings.legacy_note_title,
-            self.settings.legacy_note_items,
-            self.settings.legacy_note_done,
-            self.settings.legacy_note_todo,
-            self.memo_labels(),
-        )
         self.goal = saved_goal
         self.author_options, self.author_filter_map, self.author_display_aliases = self.build_author_options()
         display_value = saved_author_display if saved_author_display in self.author_filter_map else ""
@@ -583,6 +262,10 @@ class LineTrackerApp:
         self.root.bind("<Configure>", self.on_root_configure)
 
         self.style = ttk.Style(self.root)
+        self.app_settings_window: ttk.Frame | None = None
+        self.app_settings_card: ttk.Frame | None = None
+        self.app_settings_notebook: ttk.Notebook | None = None
+        self.app_settings_button_state = "normal"
         try:
             self.style.theme_use("clam")
         except tk.TclError:
@@ -592,16 +275,26 @@ class LineTrackerApp:
         if self.use_custom_titlebar:
             self._build_custom_titlebar()
 
-        container = ttk.Frame(self.root, padding=14, style="App.TFrame")
+        container = ttk.Frame(self.root, padding=(14, 11), style="App.TFrame")
         container.grid(row=self.content_row, column=0, sticky="nsew")
         container.columnconfigure(0, weight=0)
         container.columnconfigure(1, weight=0)
         container.columnconfigure(2, weight=0)
+        container.rowconfigure(1, weight=1)
+        container.rowconfigure(2, weight=0)
         self.container = container
 
-        self._initialize_runtime_state(args, saved_custom_today_enabled, saved_memo_text)
+        self._initialize_runtime_state(
+            args,
+            saved_graph_show_additions,
+            saved_graph_show_deletions,
+            saved_graph_show_commits,
+            saved_graph_curve,
+            saved_custom_today_enabled,
+            self.settings.note_tab,
+        )
         self._build_header(container)
-        self._build_output_section(container)
+        self._build_stats_scroll_section(container)
         self._build_progress_section(container)
         self._build_right_panel(
             container,
@@ -618,33 +311,52 @@ class LineTrackerApp:
     def _initialize_runtime_state(
         self,
         args: argparse.Namespace,
+        saved_graph_show_additions: bool,
+        saved_graph_show_deletions: bool,
+        saved_graph_show_commits: bool,
+        saved_graph_curve: float,
         saved_custom_today_enabled: bool,
-        saved_memo_text: str,
+        saved_note_tab: str,
     ) -> None:
         self.auto_refresh_job: str | None = None
+        self.schedule_poll_job: str | None = None
         self.refresh_request_id = 0
         self.refresh_in_progress = False
+        self.refresh_coordinator = RefreshCoordinator(self.safe_after)
         self.today_override: dt.date | None = args.today if saved_custom_today_enabled else None
+        initial_today = self.today_override or args.today or dt.date.today()
         self.meta_label_vars = [tk.StringVar(value="") for _ in range(2)]
         self.meta_value_vars = [tk.StringVar(value="") for _ in range(2)]
-        self.tile_label_vars = [tk.StringVar(value="") for _ in range(5)]
-        self.tile_value_vars = [tk.StringVar(value="") for _ in range(5)]
+        self.title_date_var = tk.StringVar(value=initial_today.isoformat())
+        self.tile_label_vars = [tk.StringVar(value="") for _ in range(8)]
+        self.tile_value_vars = [tk.StringVar(value="") for _ in range(8)]
         self.daily_stats_added_var = tk.StringVar(value="+0")
         self.daily_stats_removed_var = tk.StringVar(value="-0")
+        self.daily_stats_commit_var = tk.StringVar(value="0 commit")
         self.branch_stats_added_var = tk.StringVar(value="+0")
         self.branch_stats_removed_var = tk.StringVar(value="-0")
+        self.branch_stats_commit_var = tk.StringVar(value="0 commit")
         self.overall_stats_added_var = tk.StringVar(value="+0")
         self.overall_stats_removed_var = tk.StringVar(value="-0")
+        self.overall_stats_commit_var = tk.StringVar(value="0 commit")
         self.current_ref = resolve_current_ref(self.repo)
         self.main_total_committed = 0
         self.branch_total_committed = 0
         self.graph_points: list[tuple[dt.date, int]] = []
         self.graph_highlight_day: dt.date | None = None
         self.grass_panel_controller: GrassPanel | None = None
-        self.active_note_tab = "memo"
-        self.memo_text_value = saved_memo_text
-        self.memo_panel_controller: MemoPanel | None = None
+        self.schedule_panel_controller: SchedulePanel | None = None
+        self.commit_history_entries: list[CommitChangeEntry] = []
+        self.commit_history_loading = False
+        self.commit_history_exhausted = False
+        self.commit_history_generation = 0
+        self.commit_history_ref = "HEAD"
+        self.commit_history_exclude_ref = ""
         self.repo_entry_var = tk.StringVar(value=str(self.repo) if self.repo_selected else "")
+        self.schedule_path = self.settings.schedule_path
+        self.schedule_path_var = tk.StringVar(value=self.schedule_path)
+        self.schedule_parser = DirectiveScheduleParser()
+        self.schedule_signature: tuple[object, ...] | None = None
         self.compact_mode = False
         self.compact_clock_job: str | None = None
         self.compact_reposition_job: str | None = None
@@ -663,13 +375,44 @@ class LineTrackerApp:
         self.compact_alpha = min(max(float(self.settings.compact_alpha), COMPACT_WINDOW_ALPHA_MIN), COMPACT_WINDOW_ALPHA_MAX)
         self.compact_alpha_var = tk.DoubleVar(value=round(self.compact_alpha * 100))
         self.compact_alpha_text_var = tk.StringVar(value="")
+        self.graph_show_additions_var = tk.BooleanVar(value=saved_graph_show_additions)
+        self.graph_show_deletions_var = tk.BooleanVar(value=saved_graph_show_deletions)
+        self.graph_show_commits_var = tk.BooleanVar(value=saved_graph_show_commits)
+        self.graph_curve_var = tk.DoubleVar(value=saved_graph_curve)
+        self.graph_curve_text_var = tk.StringVar(value="")
+        self.graph_settings_window: tk.Toplevel | None = None
+        self.graph_settings_days_var: tk.StringVar | None = None
+        self.graph_settings_show_additions_var: tk.BooleanVar | None = None
+        self.graph_settings_show_deletions_var: tk.BooleanVar | None = None
+        self.graph_settings_show_commits_var: tk.BooleanVar | None = None
+        self.graph_settings_curve_var: tk.DoubleVar | None = None
+        self.graph_settings_flags_frame: tk.Frame | None = None
+        self.graph_settings_flag_buttons: dict[str, tk.Button] = {}
+        self.graph_settings_range_label: ttk.Label | None = None
+        self.graph_settings_metrics_label: ttk.Label | None = None
+        self.graph_settings_curve_label: ttk.Label | None = None
+        self.graph_settings_apply_button: ttk.Button | None = None
+        self.graph_settings_curve_value_label: ttk.Label | None = None
+        self.graph_settings_days_combo: ttk.Combobox | None = None
+        self.graph_settings_curve_scale: tk.Scale | None = None
         self.base_required_width = 0
         self.layout_scale = 1.0
+        self.layout_metrics = build_layout_metrics(self.layout_scale)
         self.graph_canvas_width = GRAPH_CANVAS_WIDTH
         self.progress_bar_length = BAR_LENGTH
         self.tile_min_width = BASE_TILE_MIN_WIDTH
         self.tile_wrap = BASE_TILE_LABEL_WRAP
         self.repo_entry_width = RESPONSIVE_REPO_ENTRY_WIDTH
+        self.graph_added_points: list[tuple[dt.date, int]] = []
+        self.active_note_tab = saved_note_tab if saved_note_tab in {"schedule", "grass"} else "schedule"
+        self.progress_language_lines: dict[str, dict[str, int]] = {"overall": {}, "daily": {}}
+        self.progress_bar_segments: dict[str, list[tuple[int, int, str]]] = {"overall": [], "daily": []}
+        self.progress_bar_percents: dict[str, float] = {"overall": 0.0, "daily": 0.0}
+        self.progress_bar_texts: dict[str, str] = {"overall": "", "daily": ""}
+        self.progress_language_tooltip: tk.Toplevel | None = None
+        self.progress_language_hover_key = ""
+        self.graph_deleted_points: list[tuple[dt.date, int]] = []
+        self.graph_commit_points: list[tuple[dt.date, int]] = []
 
     def _build_custom_titlebar(self) -> None:
         titlebar = ttk.Frame(self.root, style="TitleBar.TFrame", height=CUSTOM_TITLEBAR_HEIGHT, padding=(10, 6))
@@ -727,97 +470,79 @@ class LineTrackerApp:
         widget.bind("<B1-Motion>", self.on_titlebar_drag_motion, add="+")
 
     def _build_header(self, container: ttk.Frame) -> None:
+        m = self.layout_metrics
         header_frame = ttk.Frame(container, style="App.TFrame")
-        header_frame.grid(row=0, column=0, columnspan=4, sticky="ew", pady=(0, 10))
+        header_frame.grid(row=0, column=0, columnspan=4, sticky="ew", pady=(0, m.header_gap))
         header_frame.columnconfigure(1, weight=1)
         header_frame.columnconfigure(2, weight=1)
+        self.header_frame = header_frame
         self.header_accent_bar = tk.Frame(header_frame, bg=self.theme.accent, width=6, height=34)
-        self.header_accent_bar.grid(row=0, column=0, rowspan=2, sticky="ns", padx=(0, 10))
+        self.header_accent_bar.grid(row=0, column=0, rowspan=2, sticky="ns", padx=(0, m.header_group_gap))
         title_row = ttk.Frame(header_frame, style="App.TFrame")
         title_row.grid(row=0, column=1, sticky="w")
         self.title_label = ttk.Label(title_row, text=self.get_header_project_title(), style="Title.TLabel")
         self.title_label.grid(row=0, column=0, sticky="w")
+        self.title_date_label = ttk.Label(title_row, textvariable=self.title_date_var, style="Subtitle.TLabel")
+        self.title_date_label.grid(row=0, column=1, sticky="w", padx=(m.header_group_gap, 0), pady=(3, 0))
         self.subtitle_label = ttk.Label(
             header_frame,
             text=self.format_ref_label(),
             style="Subtitle.TLabel",
         )
-        self.subtitle_label.grid(row=1, column=1, sticky="w", pady=(2, 0))
+        self.subtitle_label.grid(row=1, column=1, sticky="w", pady=(m.header_subtitle_gap, 0))
 
         right_header = ttk.Frame(header_frame, style="App.TFrame")
         right_header.grid(row=0, column=2, rowspan=2, sticky="e")
-        right_header.columnconfigure(2, weight=1)
+        self.right_header = right_header
 
-        lang_header = ttk.Frame(right_header, style="App.TFrame")
-        lang_header.grid(row=0, column=0, rowspan=2, sticky="w", padx=(0, 10))
-
-        self.lang_label = ttk.Label(lang_header, text=self.t("lang_label"), style="Subtitle.TLabel")
-        self.lang_label.grid(row=0, column=0, sticky="w", pady=(0, 2))
-
-        self.lang_combo = ttk.Combobox(
-            lang_header,
-            textvariable=self.lang_var,
-            values=list(LANG_OPTIONS.keys()),
-            width=10,
-            state="readonly",
-            style="Tracker.TCombobox",
+        self.app_settings_button = tk.Canvas(
+            right_header,
+            width=APP_SETTINGS_BUTTON_SIZE,
+            height=APP_SETTINGS_BUTTON_SIZE,
+            highlightthickness=0,
+            bd=0,
+            relief="flat",
+            cursor="hand2",
+            takefocus=1,
         )
-        self.lang_combo.grid(row=1, column=0, sticky="w")
-        self.lang_combo.bind("<<ComboboxSelected>>", self.on_language_select)
-        self._bind_combobox_text_selection_clear(self.lang_combo)
+        self.app_settings_button.grid(row=0, column=0, rowspan=2, sticky="e")
+        self.app_settings_button.bind("<Enter>", lambda _: self.set_app_settings_button_state("hover"))
+        self.app_settings_button.bind("<Leave>", lambda _: self.set_app_settings_button_state("normal"))
+        self.app_settings_button.bind("<ButtonPress-1>", lambda _: self.set_app_settings_button_state("pressed"))
+        self.app_settings_button.bind("<ButtonRelease-1>", self.on_app_settings_button_release)
+        self.app_settings_button.bind("<Return>", self.on_app_settings_button_keypress)
+        self.app_settings_button.bind("<space>", self.on_app_settings_button_keypress)
+        self.redraw_app_settings_button()
 
-        theme_header = ttk.Frame(right_header, style="App.TFrame")
-        theme_header.grid(row=0, column=1, rowspan=2, sticky="w", padx=(0, 10))
-
-        self.theme_label = ttk.Label(theme_header, text=self.t("theme_label"), style="Subtitle.TLabel")
-        self.theme_label.grid(row=0, column=0, sticky="w", pady=(0, 2))
-
-        self.theme_combo = ttk.Combobox(
-            theme_header,
-            textvariable=self.theme_var,
-            values=self.theme_display_values(),
-            width=12,
-            state="readonly",
-            style="Tracker.TCombobox",
+    def _build_stats_scroll_section(self, container: ttk.Frame) -> None:
+        m = self.layout_metrics
+        stats_scroll_panel = ScrollPanel(
+            container,
+            canvas_bg=self.theme.app_bg,
+            scrollbar_style=CARD_SCROLLBAR_STYLE,
         )
-        self.theme_combo.grid(row=1, column=0, sticky="w")
-        self.theme_combo.bind("<<ComboboxSelected>>", self.on_theme_select)
-        self._bind_combobox_text_selection_clear(self.theme_combo)
+        stats_scroll_host = stats_scroll_panel.build()
+        stats_scroll_host.grid(row=1, column=0, sticky="nsew", padx=(0, m.header_group_gap))
+        self.stats_scroll_panel = stats_scroll_panel
+        self.stats_scroll_host = stats_scroll_host
+        self.stats_canvas = stats_scroll_panel.canvas
+        self.stats_scrollbar = stats_scroll_panel.scrollbar
+        self.stats_container = stats_scroll_panel.content
+        self.stats_canvas_window = stats_scroll_panel.canvas_window
+        if self.stats_canvas is not None:
+            self.stats_canvas.configure(height=1)
 
-        repo_header = ttk.Frame(right_header, style="App.TFrame")
-        repo_header.grid(row=0, column=2, rowspan=2, sticky="e")
-        repo_header.columnconfigure(0, weight=1)
-
-        self.repo_header_label = ttk.Label(repo_header, text=self.t("repo_label"), style="Subtitle.TLabel")
-        self.repo_header_label.grid(row=0, column=0, sticky="w", pady=(0, 2))
-
-        self.repo_entry = ttk.Entry(repo_header, textvariable=self.repo_entry_var, width=self.repo_entry_width, style="Tracker.TEntry")
-        self.repo_entry.grid(row=1, column=0, sticky="ew")
-        self.repo_entry.bind("<Return>", self.on_repo_entry_enter)
-
-        self.repo_apply_button = ttk.Button(repo_header, text=self.t("repo_select"), command=self.browse_repo)
-        self.repo_apply_button.grid(row=1, column=1, sticky="e", padx=(8, 0))
+        if self.stats_container is not None:
+            self._build_output_section(self.stats_container)
+            self.stats_scroll_panel.bind_content_tree()
+            self.stats_scroll_panel.update_scroll_region()
 
     def _build_output_section(self, container: ttk.Frame) -> None:
+        m = self.layout_metrics
         output_section = ttk.Frame(container, style="App.TFrame")
-        output_section.grid(row=1, column=0, sticky="ew", padx=(0, 10))
+        output_section.grid(row=0, column=0, sticky="ew")
         output_section.columnconfigure(0, weight=1)
-
-        meta_row = ttk.Frame(output_section, style="App.TFrame")
-        meta_row.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        meta_row.columnconfigure(0, weight=1, uniform="meta")
-        meta_row.columnconfigure(1, weight=1, uniform="meta")
-
-        for idx in range(2):
-            chip = ttk.Frame(meta_row, style="Chip.TFrame", padding=(8, 4))
-            chip.grid(row=0, column=idx, sticky="ew", padx=(0, 10) if idx == 0 else (0, 0))
-            chip.columnconfigure(1, weight=1)
-
-            label = ttk.Label(chip, textvariable=self.meta_label_vars[idx], style="ChipLabel.TLabel")
-            label.grid(row=0, column=0, sticky="w")
-
-            value = ttk.Label(chip, textvariable=self.meta_value_vars[idx], style="ChipValue.TLabel")
-            value.grid(row=0, column=1, sticky="w", padx=(6, 0))
+        self.output_section = output_section
 
         tile_min_width = BASE_TILE_MIN_WIDTH
         tile_accents = self.theme.tile_accents
@@ -827,9 +552,11 @@ class LineTrackerApp:
         tile_wrap = BASE_TILE_LABEL_WRAP
 
         daily_stats_section = ttk.Frame(output_section, style="App.TFrame")
-        daily_stats_section.grid(row=1, column=0, sticky="ew")
+        daily_stats_section.grid(row=0, column=0, sticky="ew")
+        self.daily_stats_section = daily_stats_section
         daily_stats_header = ttk.Frame(daily_stats_section, style="App.TFrame")
-        daily_stats_header.grid(row=0, column=0, sticky="w", pady=(0, 2))
+        daily_stats_header.grid(row=0, column=0, sticky="w", pady=(0, m.section_title_gap))
+        self.daily_stats_header = daily_stats_header
 
         self.daily_stats_label = ttk.Label(
             daily_stats_header,
@@ -852,6 +579,13 @@ class LineTrackerApp:
         )
         self.daily_stats_removed_label.grid(row=0, column=2, sticky="w", padx=(8, 0))
 
+        self.daily_stats_commit_label = ttk.Label(
+            daily_stats_header,
+            textvariable=self.daily_stats_commit_var,
+            style="SectionCommit.TLabel",
+        )
+        self.daily_stats_commit_label.grid(row=0, column=3, sticky="w", padx=(10, 0))
+
         self.daily_tile_grid = ttk.Frame(daily_stats_section, style="App.TFrame")
         self.daily_tile_grid.grid(row=1, column=0, sticky="ew")
         self.daily_tile_grid.columnconfigure(0, weight=1, uniform="tile", minsize=tile_min_width)
@@ -867,13 +601,16 @@ class LineTrackerApp:
             self._build_summary_tile(self.daily_tile_grid, idx, row, col, colspan, tile_wrap, tile_accents)
 
         lower_stats_stack = ttk.Frame(output_section, style="App.TFrame")
-        lower_stats_stack.grid(row=2, column=0, sticky="ew", pady=(6, 0))
+        lower_stats_stack.grid(row=1, column=0, sticky="ew", pady=(m.section_gap, 0))
         lower_stats_stack.columnconfigure(0, weight=1)
+        self.lower_stats_stack = lower_stats_stack
 
         branch_stats_section = ttk.Frame(lower_stats_stack, style="App.TFrame")
         branch_stats_section.grid(row=0, column=0, sticky="ew")
+        self.branch_stats_section = branch_stats_section
         branch_stats_header = ttk.Frame(branch_stats_section, style="App.TFrame")
-        branch_stats_header.grid(row=0, column=0, sticky="w", pady=(0, 2))
+        branch_stats_header.grid(row=0, column=0, sticky="w", pady=(0, m.section_title_gap))
+        self.branch_stats_header = branch_stats_header
 
         self.branch_stats_label = ttk.Label(
             branch_stats_header,
@@ -896,22 +633,33 @@ class LineTrackerApp:
         )
         self.branch_stats_removed_label.grid(row=0, column=2, sticky="w", padx=(8, 0))
 
+        self.branch_stats_commit_label = ttk.Label(
+            branch_stats_header,
+            textvariable=self.branch_stats_commit_var,
+            style="SectionCommit.TLabel",
+        )
+        self.branch_stats_commit_label.grid(row=0, column=3, sticky="w", padx=(10, 0))
+
         self.branch_tile_grid = ttk.Frame(branch_stats_section, style="App.TFrame")
         self.branch_tile_grid.grid(row=1, column=0, sticky="ew")
-        self.branch_tile_grid.columnconfigure(0, weight=1, minsize=tile_min_width)
+        self.branch_tile_grid.columnconfigure(0, weight=1, uniform="tile", minsize=tile_min_width)
+        self.branch_tile_grid.columnconfigure(1, weight=1, uniform="tile", minsize=tile_min_width)
         self.tile_grids.append(self.branch_tile_grid)
 
         branch_tile_positions = {
             2: (0, 0, 1),
+            3: (0, 1, 1),
         }
-        for idx in (2,):
+        for idx in (2, 3):
             row, col, colspan = branch_tile_positions[idx]
             self._build_summary_tile(self.branch_tile_grid, idx, row, col, colspan, tile_wrap, tile_accents)
 
         overall_stats_section = ttk.Frame(lower_stats_stack, style="App.TFrame")
-        overall_stats_section.grid(row=1, column=0, sticky="ew", pady=(6, 0))
+        overall_stats_section.grid(row=1, column=0, sticky="ew", pady=(m.section_gap, 0))
+        self.overall_stats_section = overall_stats_section
         overall_stats_header = ttk.Frame(overall_stats_section, style="App.TFrame")
-        overall_stats_header.grid(row=0, column=0, sticky="w", pady=(0, 2))
+        overall_stats_header.grid(row=0, column=0, sticky="w", pady=(0, m.section_title_gap))
+        self.overall_stats_header = overall_stats_header
 
         self.overall_stats_label = ttk.Label(
             overall_stats_header,
@@ -934,13 +682,56 @@ class LineTrackerApp:
         )
         self.overall_stats_removed_label.grid(row=0, column=2, sticky="w", padx=(8, 0))
 
+        self.overall_stats_commit_label = ttk.Label(
+            overall_stats_header,
+            textvariable=self.overall_stats_commit_var,
+            style="SectionCommit.TLabel",
+        )
+        self.overall_stats_commit_label.grid(row=0, column=3, sticky="w", padx=(10, 0))
+
         self.overall_tile_grid = ttk.Frame(overall_stats_section, style="App.TFrame")
         self.overall_tile_grid.grid(row=1, column=0, sticky="ew")
-        self.overall_tile_grid.columnconfigure(0, weight=1, minsize=tile_min_width)
+        self.overall_tile_grid.columnconfigure(0, weight=1, uniform="tile", minsize=tile_min_width)
+        self.overall_tile_grid.columnconfigure(1, weight=1, uniform="tile", minsize=tile_min_width)
         self.tile_grids.append(self.overall_tile_grid)
 
-        self.overall_tile_widget = self._build_summary_tile(self.overall_tile_grid, 3, 0, 0, 1, tile_wrap, tile_accents)
-        self.overall_tile_widget.grid_configure(pady=(0, 0))
+        overall_tile_positions = {
+            4: (0, 0, 1),
+            5: (0, 1, 1),
+        }
+        for idx in (4, 5):
+            row, col, colspan = overall_tile_positions[idx]
+            tile = self._build_summary_tile(self.overall_tile_grid, idx, row, col, colspan, tile_wrap, tile_accents)
+            tile.grid_configure(pady=(0, 0))
+
+        user_stats_section = ttk.Frame(lower_stats_stack, style="App.TFrame")
+        user_stats_section.grid(row=2, column=0, sticky="ew", pady=(m.section_gap, 0))
+        self.user_stats_section = user_stats_section
+        user_stats_header = ttk.Frame(user_stats_section, style="App.TFrame")
+        user_stats_header.grid(row=0, column=0, sticky="w", pady=(0, m.section_title_gap))
+        self.user_stats_header = user_stats_header
+
+        self.user_stats_label = ttk.Label(
+            user_stats_header,
+            text=self.t("user_stats_section"),
+            style="Section.TLabel",
+        )
+        self.user_stats_label.grid(row=0, column=0, sticky="w")
+
+        self.user_tile_grid = ttk.Frame(user_stats_section, style="App.TFrame")
+        self.user_tile_grid.grid(row=1, column=0, sticky="ew")
+        self.user_tile_grid.columnconfigure(0, weight=1, uniform="tile", minsize=tile_min_width)
+        self.user_tile_grid.columnconfigure(1, weight=1, uniform="tile", minsize=tile_min_width)
+        self.tile_grids.append(self.user_tile_grid)
+
+        user_tile_positions = {
+            6: (0, 0, 1),
+            7: (0, 1, 1),
+        }
+        for idx in (6, 7):
+            row, col, colspan = user_tile_positions[idx]
+            tile = self._build_summary_tile(self.user_tile_grid, idx, row, col, colspan, tile_wrap, tile_accents)
+            tile.grid_configure(pady=(0, 0))
 
     def _build_summary_tile(
         self,
@@ -952,19 +743,24 @@ class LineTrackerApp:
         tile_wrap: int,
         tile_accents: tuple[str, ...] | list[str],
     ) -> ttk.Frame:
-        tile = ttk.Frame(parent, style="Tile.TFrame", padding=(10, 5))
+        m = self.layout_metrics
+        tile = ttk.Frame(parent, style="Tile.TFrame", padding=(m.tile_pad_x, m.tile_pad_y))
         tile.grid(
             row=row,
             column=col,
             columnspan=colspan,
             sticky="ew",
-            padx=(0, 8) if col == 0 and colspan == 1 else (0, 0),
-            pady=(0, 4) if row == 0 else (0, 0),
+            padx=(0, m.tile_gap_x) if col == 0 and colspan == 1 else (0, 0),
+            pady=(0, m.tile_gap_y) if row == 0 else (0, 0),
         )
         tile.columnconfigure(1, weight=1)
+        if not hasattr(self, "tile_frames"):
+            self.tile_frames = []
+        self.tile_frames.append(tile)
 
-        accent = tk.Frame(tile, bg=tile_accents[idx], width=4)
-        accent.grid(row=0, column=0, rowspan=2, sticky="ns", padx=(0, 8))
+        accent_color = tile_accents[idx % len(tile_accents)] if tile_accents else self.theme.accent
+        accent = tk.Frame(tile, bg=accent_color, width=4)
+        accent.grid(row=0, column=0, rowspan=2, sticky="ns", padx=(0, m.tile_gap_x))
         self.tile_accent_widgets.append(accent)
 
         label = ttk.Label(
@@ -977,34 +773,41 @@ class LineTrackerApp:
         self.tile_label_widgets.append(label)
 
         value = ttk.Label(tile, textvariable=self.tile_value_vars[idx], style="TileValue.TLabel")
-        value.grid(row=1, column=1, sticky="w", pady=(1, 0))
+        value.grid(row=1, column=1, sticky="w", pady=(m.tile_value_gap, 0))
         return tile
 
     def _build_progress_section(self, container: ttk.Frame) -> None:
+        m = self.layout_metrics
         progress_section = ttk.Frame(container, style="App.TFrame")
-        progress_section.grid(row=2, column=0, sticky="ew", padx=(0, 10), pady=(0, 0))
+        progress_section.grid(row=2, column=0, sticky="ew", pady=(m.section_gap, 0))
         progress_section.columnconfigure(0, weight=1)
+        progress_section.rowconfigure(0, minsize=20)
+        self.progress_section = progress_section
 
         self.progress_title = ttk.Label(progress_section, text=self.t("progress"), style="Section.TLabel")
-        self.progress_title.grid(row=0, column=0, sticky="w", pady=(0, 4))
+        self.progress_title.grid(row=0, column=0, sticky="w", pady=(0, m.section_title_gap + 1))
 
-        progress_card = ttk.Frame(progress_section, style="Card.TFrame", padding=(12, 8))
+        progress_card = ttk.Frame(progress_section, style="Card.TFrame", padding=(m.card_pad_x, m.card_pad_y))
         progress_card.grid(row=1, column=0, sticky="ew")
+        progress_card.columnconfigure(0, weight=1)
+        self.progress_card = progress_card
 
         self.overall_progress_title = ttk.Label(progress_card, text=self.t("overall_progress"), style="CardTitle.TLabel")
         self.overall_progress_title.grid(row=0, column=0, sticky="w")
 
-        self.overall_progress_var = tk.DoubleVar(value=0.0)
-        self.overall_progress_bar = ttk.Progressbar(
+        self.overall_progress_bar = tk.Canvas(
             progress_card,
-            orient="horizontal",
-            mode="determinate",
-            maximum=100.0,
-            variable=self.overall_progress_var,
-            length=self.progress_bar_length,
-            style="Overall.Horizontal.TProgressbar",
+            width=self.progress_bar_length,
+            height=PROGRESS_BAR_HEIGHT,
+            highlightthickness=0,
+            bd=0,
+            relief="flat",
+            cursor="hand2",
         )
-        self.overall_progress_bar.grid(row=1, column=0, sticky="ew", pady=(6, 0))
+        self.overall_progress_bar.grid(row=1, column=0, sticky="ew", pady=(m.card_inner_gap, 0))
+        self.overall_progress_bar.bind("<Configure>", lambda _: self.redraw_progress_bar("overall"))
+        self.overall_progress_bar.bind("<Motion>", lambda event: self.on_progress_bar_motion(event, "overall"))
+        self.overall_progress_bar.bind("<Leave>", lambda _: self.hide_progress_language_tooltip())
 
         self.overall_progress_text_var = tk.StringVar(value="")
         self.overall_progress_text_label = ttk.Label(
@@ -1012,30 +815,79 @@ class LineTrackerApp:
             textvariable=self.overall_progress_text_var,
             style="CardLabel.TLabel",
         )
-        self.overall_progress_text_label.grid(row=2, column=0, sticky="w", pady=(4, 0))
+        self.overall_progress_text_label.grid(row=2, column=0, sticky="w", pady=(m.control_small_gap, 0))
 
         self.daily_progress_title = ttk.Label(progress_card, text=self.t("daily_progress"), style="CardTitle.TLabel")
-        self.daily_progress_title.grid(row=3, column=0, sticky="w", pady=(12, 0))
+        self.daily_progress_title.grid(row=3, column=0, sticky="w", pady=(m.progress_block_gap, 0))
 
-        self.daily_progress_var = tk.DoubleVar(value=0.0)
-        self.daily_progress_bar = ttk.Progressbar(
+        self.daily_progress_bar = tk.Canvas(
             progress_card,
-            orient="horizontal",
-            mode="determinate",
-            maximum=100.0,
-            variable=self.daily_progress_var,
-            length=self.progress_bar_length,
-            style="Daily.Horizontal.TProgressbar",
+            width=self.progress_bar_length,
+            height=PROGRESS_BAR_HEIGHT,
+            highlightthickness=0,
+            bd=0,
+            relief="flat",
+            cursor="hand2",
         )
-        self.daily_progress_bar.grid(row=4, column=0, sticky="ew", pady=(6, 0))
+        self.daily_progress_bar.grid(row=4, column=0, sticky="ew", pady=(m.card_inner_gap, 2))
+        self.daily_progress_bar.bind("<Configure>", lambda _: self.redraw_progress_bar("daily"))
+        self.daily_progress_bar.bind("<Motion>", lambda event: self.on_progress_bar_motion(event, "daily"))
+        self.daily_progress_bar.bind("<Leave>", lambda _: self.hide_progress_language_tooltip())
 
-        self.daily_progress_text_var = tk.StringVar(value="")
-        self.daily_progress_text_label = ttk.Label(
-            progress_card,
-            textvariable=self.daily_progress_text_var,
-            style="CardLabel.TLabel",
+    def update_left_panel_width(self) -> None:
+        m = self.layout_metrics
+        stats_content_width = max(
+            (self.tile_min_width * 2) + m.tile_gap_x,
+            self.progress_bar_length + (m.card_pad_x * 2),
         )
-        self.daily_progress_text_label.grid(row=5, column=0, sticky="w", pady=(4, 0))
+        host_width = stats_content_width + LEFT_PANEL_SCROLLBAR_ALLOWANCE
+
+        if hasattr(self, "container"):
+            self.container.columnconfigure(0, minsize=host_width)
+        stats_scroll_panel = getattr(self, "stats_scroll_panel", None)
+        if stats_scroll_panel is not None:
+            stats_scroll_panel.configure_width(stats_content_width)
+            stats_scroll_panel.update_scroll_region()
+        if hasattr(self, "output_section"):
+            self.output_section.columnconfigure(0, minsize=stats_content_width)
+
+    def _build_commit_history_section(self, right_area: ttk.Frame) -> None:
+        m = self.layout_metrics
+        commit_history_section = ttk.Frame(right_area, style="App.TFrame")
+        commit_history_section.grid(row=1, column=0, sticky="new", padx=(0, m.header_group_gap), pady=(m.section_gap, 0))
+        commit_history_section.columnconfigure(0, weight=1, minsize=GRAPH_CARD_WIDTH)
+        self.commit_history_section = commit_history_section
+
+        self.commit_history_title = ttk.Label(
+            commit_history_section,
+            text=self.t("commit_history_section"),
+            style="Section.TLabel",
+        )
+        self.commit_history_title.grid(row=0, column=0, sticky="w", pady=(0, m.section_title_gap + 1))
+
+        commit_history_card = ttk.Frame(commit_history_section, style="Card.TFrame", padding=(m.card_pad_x, m.card_pad_y))
+        commit_history_card.grid(row=1, column=0, sticky="ew")
+        commit_history_card.columnconfigure(0, weight=1)
+        commit_history_card.rowconfigure(0, weight=1)
+        self.commit_history_card = commit_history_card
+
+        commit_scroll_panel = ScrollPanel(
+            commit_history_card,
+            canvas_bg=self.theme.card_bg,
+            scrollbar_style=CARD_SCROLLBAR_STYLE,
+            content_style="CardInner.TFrame",
+        )
+        commit_scroll_host = commit_scroll_panel.build()
+        commit_scroll_host.grid(row=0, column=0, sticky="nsew")
+        self.commit_history_scroll_panel = commit_scroll_panel
+        self.commit_history_scroll_panel.set_scroll_callback(self.on_commit_history_scroll)
+        self.commit_history_scroll_host = commit_scroll_host
+        self.commit_history_container = commit_scroll_panel.content
+        if self.commit_history_container is not None:
+            self.commit_history_container.columnconfigure(0, weight=1)
+            commit_scroll_panel.bind_content_tree()
+
+        self.update_commit_history([])
 
     def _build_right_panel(
         self,
@@ -1046,51 +898,75 @@ class LineTrackerApp:
         saved_today_text: str,
         saved_auto_refresh: bool,
     ) -> None:
+        m = self.layout_metrics
         right_area = ttk.Frame(container, style="App.TFrame")
-        right_area.grid(row=1, column=2, rowspan=2, sticky="nw", padx=(14, 0))
+        right_area.grid(row=1, column=2, rowspan=2, sticky="nw", padx=(m.panel_gap_x, 0))
         right_area.columnconfigure(0, weight=0, minsize=GRAPH_CARD_WIDTH)
         right_area.columnconfigure(1, weight=0, minsize=NOTE_CARD_WIDTH)
         self.right_area = right_area
 
-        self._build_graph_section(right_area, saved_graph_days)
-        self._build_memo_section(right_area)
-        self._build_controls_section(
-            right_area,
+        self._initialize_settings_vars(
             saved_custom_today_enabled=saved_custom_today_enabled,
             saved_today_text=saved_today_text,
             saved_auto_refresh=saved_auto_refresh,
         )
+        self._build_graph_section(right_area, saved_graph_days)
+        self._build_commit_history_section(right_area)
+        self._build_grass_section(right_area)
+
+    def _initialize_settings_vars(
+        self,
+        *,
+        saved_custom_today_enabled: bool,
+        saved_today_text: str,
+        saved_auto_refresh: bool,
+    ) -> None:
+        self.custom_today_var = tk.BooleanVar(value=saved_custom_today_enabled)
+        self.today_entry_var = tk.StringVar(value=saved_today_text)
+        self.goal_entry_var = tk.StringVar(value=str(self.goal))
+        self.author_entry_var = tk.StringVar(value=self.author_display)
+        self.auto_refresh_var = tk.BooleanVar(value=saved_auto_refresh)
 
     def _build_graph_section(self, right_area: ttk.Frame, saved_graph_days: str) -> None:
+        m = self.layout_metrics
         graph_section = ttk.Frame(right_area, style="App.TFrame")
-        graph_section.grid(row=0, column=0, sticky="nw", padx=(0, 10))
+        graph_section.grid(row=0, column=0, sticky="nw", padx=(0, m.header_group_gap))
         graph_section.columnconfigure(0, weight=1)
+        self.graph_section = graph_section
 
         graph_header = ttk.Frame(graph_section, style="App.TFrame")
-        graph_header.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        graph_header.grid(row=0, column=0, sticky="ew", pady=(0, m.note_tab_gap))
         graph_header.columnconfigure(0, weight=1)
+        self.graph_header = graph_header
 
         self.graph_title = ttk.Label(graph_header, text=self.t("graph_title"), style="Section.TLabel")
         self.graph_title.grid(row=0, column=0, sticky="w")
 
         self.graph_days_var = tk.StringVar(value=saved_graph_days)
-        self.graph_days_label = ttk.Label(graph_header, text=self.t("graph_period"), style="Muted.TLabel")
-        self.graph_days_label.grid(row=0, column=1, sticky="e", padx=(8, 4))
-
-        self.graph_days_combo = ttk.Combobox(
+        self.graph_settings_button_state = "normal"
+        self.graph_settings_button = tk.Canvas(
             graph_header,
-            values=["7", "14", "21", "30", "60", "90", "180"],
-            textvariable=self.graph_days_var,
-            width=6,
-            state="readonly",
-            style="Tracker.TCombobox",
+            width=GRAPH_SETTINGS_BUTTON_SIZE,
+            height=GRAPH_SETTINGS_BUTTON_SIZE,
+            highlightthickness=0,
+            bd=0,
+            relief="flat",
+            cursor="hand2",
+            takefocus=1,
         )
-        self.graph_days_combo.grid(row=0, column=2, sticky="e")
-        self.graph_days_combo.bind("<<ComboboxSelected>>", self.on_graph_days_change)
-        self._bind_combobox_text_selection_clear(self.graph_days_combo)
+        self.graph_settings_button.grid(row=0, column=1, sticky="e")
+        self.graph_settings_button.bind("<Enter>", lambda _: self.set_graph_settings_button_state("hover"))
+        self.graph_settings_button.bind("<Leave>", lambda _: self.set_graph_settings_button_state("normal"))
+        self.graph_settings_button.bind("<ButtonPress-1>", lambda _: self.set_graph_settings_button_state("pressed"))
+        self.graph_settings_button.bind("<ButtonRelease-1>", self.on_graph_settings_button_release)
+        self.graph_settings_button.bind("<Return>", self.on_graph_settings_button_keypress)
+        self.graph_settings_button.bind("<space>", self.on_graph_settings_button_keypress)
+        self.redraw_graph_settings_button()
 
-        graph_card = ttk.Frame(graph_section, style="Card.TFrame", padding=(12, 10))
+        graph_card = ttk.Frame(graph_section, style="Card.TFrame", padding=(m.card_pad_x, m.card_pad_y))
         graph_card.grid(row=1, column=0, sticky="ew")
+        graph_card.columnconfigure(0, weight=1)
+        self.graph_card = graph_card
 
         self.graph_canvas = tk.Canvas(
             graph_card,
@@ -1100,15 +976,16 @@ class LineTrackerApp:
             highlightthickness=1,
             highlightbackground=self.theme.border,
         )
-        self.graph_canvas.grid(row=0, column=0, sticky="ew", pady=(2, 0))
+        self.graph_canvas.grid(row=0, column=0, sticky="ew", pady=(max(1, m.tile_value_gap), 0))
 
         self.graph_summary_var = tk.StringVar(value="")
         self.graph_summary_label = ttk.Label(graph_card, textvariable=self.graph_summary_var, style="CardLabel.TLabel")
-        self.graph_summary_label.grid(row=1, column=0, sticky="w", pady=(6, 0))
+        self.graph_summary_label.grid(row=1, column=0, sticky="w", pady=(m.card_inner_gap, 0))
 
-    def _build_memo_section(self, right_area: ttk.Frame) -> None:
+    def _build_grass_section(self, right_area: ttk.Frame) -> None:
+        m = self.layout_metrics
         note_section = ttk.Frame(right_area, style="App.TFrame")
-        note_section.grid(row=0, column=1, rowspan=2, sticky="nw", padx=(10, 0))
+        note_section.grid(row=0, column=1, rowspan=2, sticky="nw", padx=(m.header_group_gap, 0))
         note_section.columnconfigure(0, weight=1, minsize=NOTE_CARD_WIDTH)
         self.note_section = note_section
         self.note_section_column = 0
@@ -1116,54 +993,41 @@ class LineTrackerApp:
         self.right_area_note_column = 1
 
         note_tabs = ttk.Frame(note_section, style="App.TFrame")
-        note_tabs.grid(row=0, column=0, sticky="w", pady=(0, 6))
+        note_tabs.grid(row=0, column=0, sticky="w", pady=(0, m.note_tab_gap))
+        note_tabs.columnconfigure(0, weight=0)
+        note_tabs.columnconfigure(1, weight=0)
+        self.note_tabs = note_tabs
 
-        self.memo_tab_button = ttk.Button(
-            note_tabs,
-            text=self.t("tab_memo"),
-            command=lambda: self.set_note_tab("memo"),
-            style="TabActive.TButton",
-        )
-        self.memo_tab_button.grid(row=0, column=0, sticky="w")
+        self.schedule_tab_button = ttk.Button(note_tabs, command=lambda: self.show_note_tab("schedule"))
+        self.schedule_tab_button.grid(row=0, column=0, sticky="w")
+        self.grass_tab_button = ttk.Button(note_tabs, command=lambda: self.show_note_tab("grass"))
+        self.grass_tab_button.grid(row=0, column=1, sticky="w", padx=(m.note_tab_gap, 0))
 
-        self.grass_tab_button = ttk.Button(
-            note_tabs,
-            text=self.t("tab_grass"),
-            command=lambda: self.set_note_tab("grass"),
-            style="Tab.TButton",
-        )
-        self.grass_tab_button.grid(row=0, column=1, sticky="w", padx=(8, 0))
-
-        note_card = ttk.Frame(note_section, style="Card.TFrame", padding=(12, 10))
+        note_card = ttk.Frame(note_section, style="Card.TFrame", padding=(m.card_pad_x, m.card_pad_y))
         note_card.grid(row=1, column=0, sticky="ew")
         note_card.rowconfigure(0, weight=1)
         note_card.columnconfigure(0, weight=1)
         self.note_card = note_card
 
-        self.memo_panel = ttk.Frame(note_card, style="CardInner.TFrame")
-        self.memo_panel.grid(row=0, column=0, sticky="nsew")
-        self.memo_panel.columnconfigure(0, weight=1)
+        self.schedule_panel = ttk.Frame(note_card, style="CardInner.TFrame")
+        self.schedule_panel.grid(row=0, column=0, sticky="nsew")
+        self.schedule_panel.columnconfigure(0, weight=1)
 
         self.grass_panel = ttk.Frame(note_card, style="CardInner.TFrame")
         self.grass_panel.grid(row=0, column=0, sticky="nsew")
         self.grass_panel.columnconfigure(0, weight=1)
 
-        self.memo_panel_controller = MemoPanel(
-            MemoPanelBindings(
-                root=self.root,
+        self.schedule_panel_controller = SchedulePanel(
+            SchedulePanelBindings(
                 translate=self.t,
                 get_theme=lambda: self.theme,
-                get_labels=self.memo_labels,
-                get_placeholder_titles=self._placeholder_memo_titles,
-                save_settings=self.save_settings,
-                copy_to_clipboard=self.copy_to_clipboard,
-                show_error=self.show_error,
-                font_mono=FONT_MONO,
-                scrollbar_style=CARD_SCROLLBAR_STYLE,
-            ),
-            initial_text=self.memo_text_value,
+                select_file=self.browse_schedule_file,
+                reload=lambda: self.refresh_schedule(force=True),
+                open_location=self.open_schedule_location,
+            )
         )
-        self.memo_panel_controller.build(self.memo_panel)
+        self.schedule_panel_controller.build(self.schedule_panel)
+
         self.grass_panel_controller = GrassPanel(
             GrassPanelBindings(
                 translate=self.t,
@@ -1173,8 +1037,8 @@ class LineTrackerApp:
         )
         self.grass_panel_controller.build(self.grass_panel)
         self.grass_panel_controller.refresh()
+        self.show_note_tab(self.active_note_tab, persist=False)
         self.freeze_note_panel_size()
-        self.set_note_tab(self.active_note_tab)
 
     def _build_controls_section(
         self,
@@ -1184,18 +1048,20 @@ class LineTrackerApp:
         saved_today_text: str,
         saved_auto_refresh: bool,
     ) -> None:
+        m = self.layout_metrics
         self.custom_today_var = tk.BooleanVar(value=saved_custom_today_enabled)
         self.today_entry_var = tk.StringVar(value=saved_today_text)
         controls_section = ttk.Frame(right_area, style="App.TFrame")
-        controls_section.grid(row=1, column=0, sticky="ew", padx=(0, 10), pady=(0, 0))
+        controls_section.grid(row=1, column=0, sticky="ew", padx=(0, m.header_group_gap), pady=(0, 0))
         controls_section.columnconfigure(0, weight=1, minsize=GRAPH_CARD_WIDTH)
         self.controls_section = controls_section
 
         self.controls_title = ttk.Label(controls_section, text=self.t("settings"), style="Section.TLabel")
-        self.controls_title.grid(row=0, column=0, sticky="w", pady=(0, 4))
+        self.controls_title.grid(row=0, column=0, sticky="w", pady=(0, m.section_title_gap + 1))
 
-        controls_card = ttk.Frame(controls_section, style="Card.TFrame", padding=(12, 8))
+        controls_card = ttk.Frame(controls_section, style="Card.TFrame", padding=(m.card_pad_x, m.card_pad_y))
         controls_card.grid(row=1, column=0, sticky="ew")
+        self.controls_card = controls_card
 
         self.custom_today_check = ttk.Checkbutton(
             controls_card,
@@ -1203,31 +1069,31 @@ class LineTrackerApp:
             variable=self.custom_today_var,
             command=self.on_custom_date_toggle,
         )
-        self.custom_today_check.grid(row=0, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        self.custom_today_check.grid(row=0, column=0, columnspan=3, sticky="w", pady=(m.control_large_gap, 0))
         controls_card.columnconfigure(0, weight=1)
         controls_card.columnconfigure(1, weight=0)
 
         self.today_entry = ttk.Entry(controls_card, textvariable=self.today_entry_var, width=14, style="Tracker.TEntry")
-        self.today_entry.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        self.today_entry.grid(row=1, column=0, sticky="ew", pady=(m.control_small_gap, 0))
         self.today_entry.bind("<Return>", self.on_today_entry_enter)
 
         self.today_apply_button = ttk.Button(controls_card, text=self.t("apply_date"), command=self.apply_custom_date)
-        self.today_apply_button.grid(row=1, column=1, sticky="e", padx=(8, 0), pady=(4, 0))
+        self.today_apply_button.grid(row=1, column=1, sticky="e", padx=(m.control_large_gap, 0), pady=(m.control_small_gap, 0))
 
         self.goal_entry_var = tk.StringVar(value=str(self.goal))
         self.goal_label = ttk.Label(controls_card, text=self.t("goal_label"), style="CardLabel.TLabel")
-        self.goal_label.grid(row=2, column=0, sticky="w", pady=(10, 0))
+        self.goal_label.grid(row=2, column=0, sticky="w", pady=(m.control_large_gap, 0))
 
         self.goal_entry = ttk.Entry(controls_card, textvariable=self.goal_entry_var, width=14, style="Tracker.TEntry")
-        self.goal_entry.grid(row=3, column=0, sticky="ew", pady=(4, 0))
+        self.goal_entry.grid(row=3, column=0, sticky="ew", pady=(m.control_small_gap, 0))
         self.goal_entry.bind("<Return>", self.on_goal_entry_enter)
 
         self.goal_apply_button = ttk.Button(controls_card, text=self.t("apply_goal"), command=self.apply_goal)
-        self.goal_apply_button.grid(row=3, column=1, sticky="e", padx=(8, 0), pady=(4, 0))
+        self.goal_apply_button.grid(row=3, column=1, sticky="e", padx=(m.control_large_gap, 0), pady=(m.control_small_gap, 0))
 
         self.author_entry_var = tk.StringVar(value=self.author_display)
         self.author_label = ttk.Label(controls_card, text=self.t("author_label"), style="CardLabel.TLabel")
-        self.author_label.grid(row=4, column=0, sticky="w", pady=(10, 0))
+        self.author_label.grid(row=4, column=0, sticky="w", pady=(m.control_large_gap, 0))
 
         self.author_combo = ttk.Combobox(
             controls_card,
@@ -1236,13 +1102,13 @@ class LineTrackerApp:
             width=22,
             style="Tracker.TCombobox",
         )
-        self.author_combo.grid(row=5, column=0, sticky="ew", pady=(4, 0))
+        self.author_combo.grid(row=5, column=0, sticky="ew", pady=(m.control_small_gap, 0))
         self.author_combo.bind("<Return>", self.on_author_entry_enter)
         self.author_combo.bind("<<ComboboxSelected>>", self.on_author_select)
         self._bind_combobox_text_selection_clear(self.author_combo)
 
         self.author_apply_button = ttk.Button(controls_card, text=self.t("apply_author"), command=self.apply_author)
-        self.author_apply_button.grid(row=5, column=1, sticky="e", padx=(8, 0), pady=(4, 0))
+        self.author_apply_button.grid(row=5, column=1, sticky="e", padx=(m.control_large_gap, 0), pady=(m.control_small_gap, 0))
 
         self.auto_refresh_var = tk.BooleanVar(value=saved_auto_refresh)
         self.auto_refresh_check = ttk.Checkbutton(
@@ -1251,13 +1117,15 @@ class LineTrackerApp:
             variable=self.auto_refresh_var,
             command=self.on_auto_refresh_toggle,
         )
-        self.auto_refresh_check.grid(row=6, column=0, columnspan=3, sticky="w", pady=(10, 0))
+        self.auto_refresh_check.grid(row=6, column=0, columnspan=3, sticky="w", pady=(m.control_large_gap, 0))
 
     def _build_footer(self, container: ttk.Frame) -> None:
+        m = self.layout_metrics
         footer_frame = ttk.Frame(container, style="App.TFrame")
-        footer_frame.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(10, 0))
+        footer_frame.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(m.footer_gap, 0))
         footer_frame.columnconfigure(0, weight=1)
         footer_frame.columnconfigure(1, weight=0)
+        self.footer_frame = footer_frame
 
         footer_left = ttk.Frame(footer_frame, style="App.TFrame")
         footer_left.grid(row=0, column=0, sticky="w")
@@ -1278,13 +1146,13 @@ class LineTrackerApp:
             length=196,
             style=FOOTER_LOADING_STYLE,
         )
-        self.loading_label.grid(row=1, column=0, sticky="w", pady=(6, 0))
-        self.loading_bar.grid(row=1, column=1, sticky="w", padx=(6, 0), pady=(6, 0))
+        self.loading_label.grid(row=1, column=0, sticky="w", pady=(m.section_gap, 0))
+        self.loading_bar.grid(row=1, column=1, sticky="w", padx=(m.section_gap, 0), pady=(m.section_gap, 0))
         self.loading_bar.grid_remove()
 
         self.loading_detail_var = tk.StringVar(value="")
         self.loading_detail_label = ttk.Label(footer_right, textvariable=self.loading_detail_var, style="Muted.TLabel")
-        self.loading_detail_label.grid(row=0, column=0, sticky="e", padx=(0, 10))
+        self.loading_detail_label.grid(row=0, column=0, sticky="e", padx=(0, m.header_group_gap))
         self.loading_detail_label.grid_remove()
 
         self.compact_button_visual_state = "normal"
@@ -1308,10 +1176,10 @@ class LineTrackerApp:
         self.redraw_compact_launch_button()
 
         self.refresh_button = ttk.Button(footer_right, text=self.t("refresh"), command=self.refresh, style="Accent.TButton")
-        self.refresh_button.grid(row=0, column=2, sticky="e", padx=(8, 0))
+        self.refresh_button.grid(row=0, column=2, sticky="e", padx=(m.tile_gap_x, 0))
 
         self.copy_button = ttk.Button(footer_right, text=self.t("copy"), command=self.copy_output)
-        self.copy_button.grid(row=0, column=3, sticky="e", padx=(8, 0))
+        self.copy_button.grid(row=0, column=3, sticky="e", padx=(m.tile_gap_x, 0))
 
     def _build_compact_container(self) -> None:
         self.compact_container = ttk.Frame(self.root, padding=0, style="App.TFrame")
@@ -1541,6 +1409,8 @@ class LineTrackerApp:
             return
         self.enable_main_window_chrome()
         self.show_main_window()
+        self.refresh_schedule(force=True)
+        self.start_schedule_poll()
         if self.repo_selected:
             self.refresh()
         else:
@@ -1601,6 +1471,168 @@ class LineTrackerApp:
         self.theme_combo.configure(values=self.theme_display_values())
         self.theme_var.set(self.theme_display_label(self.theme_name))
 
+    def current_schedule_today(self) -> dt.date:
+        return self.today_override or dt.date.today()
+
+    def browse_schedule_file(self) -> None:
+        try:
+            resolved = resolve_schedule_path(self.repo, self.schedule_path)
+        except (OSError, ValueError):
+            resolved = None
+        start_dir = resolved.parent if resolved is not None else self.repo
+        selected = filedialog.askopenfilename(
+            title=self.t("schedule_dialog_title"),
+            initialdir=str(start_dir) if start_dir.exists() else None,
+            filetypes=(("Markdown", "*.md"), ("All files", "*.*")),
+        )
+        if not selected:
+            return
+        selected_path = Path(selected)
+        if selected_path.suffix.casefold() != ".md":
+            self.show_error(self.t("schedule_error_extension"))
+            return
+        self.schedule_path = make_portable_schedule_path(self.repo, selected_path)
+        self.schedule_path_var.set(self.schedule_path)
+        self.schedule_signature = None
+        self.save_settings()
+        self.refresh_schedule(force=True)
+
+    def apply_schedule_path(self) -> None:
+        configured_path = self.schedule_path_var.get().strip()
+        if configured_path and Path(configured_path).suffix.casefold() != ".md":
+            self.show_error(self.t("schedule_error_extension"))
+            return
+        try:
+            resolved = resolve_schedule_path(self.repo, configured_path)
+        except (OSError, ValueError):
+            self.show_error(self.t("schedule_error_missing"))
+            return
+        if configured_path and (resolved is None or not resolved.is_file()):
+            self.show_error(self.t("schedule_error_missing"))
+            return
+        self.schedule_path = configured_path
+        self.schedule_signature = None
+        self.save_settings()
+        self.refresh_schedule(force=True)
+
+    def open_schedule_location(self) -> None:
+        try:
+            source_path = resolve_schedule_path(self.repo, self.schedule_path)
+        except (OSError, ValueError):
+            source_path = None
+        if source_path is None:
+            self.show_error(self.t("schedule_error_missing"))
+            return
+        folder = source_path.parent
+        if not folder.is_dir():
+            self.show_error(self.t("schedule_error_missing"))
+            return
+        try:
+            os.startfile(str(folder))
+        except OSError:
+            self.show_error(self.t("schedule_error_open_location"))
+
+    def refresh_schedule(self, *, force: bool = False) -> None:
+        controller = self.schedule_panel_controller
+        if controller is None:
+            return
+        try:
+            source_path = resolve_schedule_path(self.repo, self.schedule_path)
+        except (OSError, ValueError) as exc:
+            signature = ("path-error", self.schedule_path, str(exc))
+            if not force and signature == self.schedule_signature:
+                return
+            self.schedule_signature = signature
+            controller.show_error(None, str(exc))
+            return
+        if source_path is None:
+            signature = ("unconfigured",)
+            if not force and signature == self.schedule_signature:
+                return
+            self.schedule_signature = signature
+            controller.show_unconfigured()
+            return
+        try:
+            stat = source_path.stat()
+        except FileNotFoundError:
+            signature = ("missing", str(source_path))
+            if not force and signature == self.schedule_signature:
+                return
+            self.schedule_signature = signature
+            controller.show_error(source_path, self.t("schedule_error_missing"))
+            return
+        except OSError as exc:
+            signature = ("stat-error", str(source_path), str(exc))
+            if not force and signature == self.schedule_signature:
+                return
+            self.schedule_signature = signature
+            controller.show_error(source_path, str(exc))
+            return
+
+        signature = ("loaded", str(source_path), stat.st_mtime_ns, stat.st_size, self.current_schedule_today())
+        if not force and signature == self.schedule_signature:
+            return
+        load_error_prefix = ("load-error", str(source_path), stat.st_mtime_ns, stat.st_size)
+        if not force and self.schedule_signature is not None and self.schedule_signature[:4] == load_error_prefix:
+            return
+        try:
+            document = load_schedule_document(source_path, self.schedule_parser)
+        except (OSError, UnicodeError, ValueError) as exc:
+            error_signature = ("load-error", *signature[1:4], str(exc))
+            if not force and error_signature == self.schedule_signature:
+                return
+            self.schedule_signature = error_signature
+            controller.show_error(source_path, str(exc))
+            return
+        self.schedule_signature = signature
+        controller.show_document(document, self.current_schedule_today())
+        self.freeze_note_panel_size()
+
+    def start_schedule_poll(self) -> None:
+        self.cancel_schedule_poll()
+        self.schedule_poll_job = self.root.after(SCHEDULE_POLL_MS, self.schedule_poll_tick)
+
+    def cancel_schedule_poll(self) -> None:
+        if self.schedule_poll_job is None:
+            return
+        try:
+            self.root.after_cancel(self.schedule_poll_job)
+        except tk.TclError:
+            pass
+        self.schedule_poll_job = None
+
+    def schedule_poll_tick(self) -> None:
+        self.schedule_poll_job = None
+        self.refresh_schedule()
+        self.start_schedule_poll()
+
+    def show_note_tab(self, tab_name: str, *, persist: bool = True) -> None:
+        selected_tab = tab_name if tab_name in {"schedule", "grass"} else "schedule"
+        self.active_note_tab = selected_tab
+        if hasattr(self, "schedule_panel"):
+            if selected_tab == "schedule":
+                self.schedule_panel.grid()
+                self.refresh_schedule()
+            else:
+                self.schedule_panel.grid_remove()
+        if hasattr(self, "grass_panel"):
+            if selected_tab == "grass":
+                self.grass_panel.grid()
+            else:
+                self.grass_panel.grid_remove()
+        if hasattr(self, "schedule_tab_button"):
+            self.schedule_tab_button.configure(
+                text=self.t("tab_schedule"),
+                style="TabActive.TButton" if selected_tab == "schedule" else "Tab.TButton",
+            )
+        if hasattr(self, "grass_tab_button"):
+            self.grass_tab_button.configure(
+                text=self.t("tab_grass"),
+                style="TabActive.TButton" if selected_tab == "grass" else "Tab.TButton",
+            )
+        if persist:
+            self.save_settings()
+
     def _bind_combobox_text_selection_clear(self, widget: ttk.Combobox) -> None:
         widget.bind("<<ComboboxSelected>>", lambda event, target=widget: self._clear_combobox_text_selection(target), add="+")
         widget.bind("<FocusIn>", lambda event, target=widget: self._clear_combobox_text_selection(target), add="+")
@@ -1619,36 +1651,18 @@ class LineTrackerApp:
                 return theme_name
         return resolve_theme_name(normalized)
 
-    def refresh_note_tab_buttons(self) -> None:
-        if not hasattr(self, "memo_tab_button"):
-            return
-        self.memo_tab_button.configure(style="TabActive.TButton" if self.active_note_tab == "memo" else "Tab.TButton")
-        self.grass_tab_button.configure(style="TabActive.TButton" if self.active_note_tab == "grass" else "Tab.TButton")
-
-    def set_note_tab(self, tab_name: str) -> None:
-        active_tab = "grass" if tab_name == "grass" else "memo"
-        self.active_note_tab = active_tab
-        if hasattr(self, "memo_panel"):
-            if active_tab == "memo":
-                self.grass_panel.grid_remove()
-                self.memo_panel.grid()
-            else:
-                self.memo_panel.grid_remove()
-                self.grass_panel.grid()
-        self.refresh_note_tab_buttons()
-
     def freeze_note_panel_size(self) -> None:
         if not hasattr(self, "note_card"):
             return
         self.root.update_idletasks()
         panel_width = max(
             int((NOTE_CARD_WIDTH - 24) * self.layout_scale),
-            self.memo_panel.winfo_reqwidth(),
             self.grass_panel.winfo_reqwidth(),
+            self.schedule_panel.winfo_reqwidth() if hasattr(self, "schedule_panel") else 0,
         )
         panel_height = max(
-            self.memo_panel.winfo_reqheight(),
             self.grass_panel.winfo_reqheight(),
+            self.schedule_panel.winfo_reqheight() if hasattr(self, "schedule_panel") else 0,
         )
         card_width = panel_width + 24 + NOTE_CARD_FIT_PADDING
         card_height = panel_height + 20
@@ -1663,6 +1677,207 @@ class LineTrackerApp:
         if self.lang == "en":
             return calendar.month_abbr[month]
         return f"{month}월"
+
+    def project_language_color(self, language: str) -> str:
+        palette = self.theme
+        colors = (
+            palette.accent,
+            palette.accent_alt,
+            palette.success,
+            palette.accent_light,
+            palette.accent_dark,
+            palette.accent_alt_dark,
+            blend_hex(palette.accent, palette.accent_alt, 0.5),
+            blend_hex(palette.success, palette.accent_alt, 0.42),
+            blend_hex(palette.accent_light, palette.danger, 0.34),
+            palette.muted_text,
+            blend_hex(palette.muted_text, palette.card_bg, 0.28),
+        )
+        try:
+            color_index = PROJECT_LANGUAGE_ORDER.index(language)
+        except ValueError:
+            color_index = len(PROJECT_LANGUAGE_ORDER) - 1
+        return colors[color_index % len(colors)]
+
+    @staticmethod
+    def project_language_extensions(language: str) -> str:
+        for group_name, extensions in LANGUAGE_EXTENSION_GROUPS:
+            if group_name == language:
+                return ", ".join(sorted(extensions))
+        return "*"
+
+    def set_progress_language_lines(
+        self,
+        overall_lines: dict[str, int],
+        daily_lines: dict[str, int],
+    ) -> None:
+        self.progress_language_lines = {
+            "overall": {
+                language: int(line_count)
+                for language, line_count in overall_lines.items()
+                if int(line_count) > 0
+            },
+            "daily": {
+                language: int(line_count)
+                for language, line_count in daily_lines.items()
+                if int(line_count) > 0
+            },
+        }
+        self.hide_progress_language_tooltip()
+
+    def redraw_progress_bars(self) -> None:
+        self.redraw_progress_bar("overall")
+        self.redraw_progress_bar("daily")
+
+    def redraw_progress_bar(self, bar_kind: str) -> None:
+        canvas = getattr(self, f"{bar_kind}_progress_bar", None)
+        if canvas is None:
+            return
+        try:
+            width = max(2, int(canvas.winfo_width()))
+            height = max(2, int(canvas.winfo_height()))
+        except tk.TclError:
+            return
+
+        palette = self.theme
+        trough_color = palette.overall_progress_trough if bar_kind == "overall" else palette.daily_progress_trough
+        fallback_color = palette.accent if bar_kind == "overall" else palette.accent_alt
+        canvas.configure(bg=palette.card_bg)
+        canvas.delete("all")
+        canvas.create_rectangle(0, 0, width - 1, height - 1, fill=trough_color, outline=palette.border)
+
+        percent = min(max(self.progress_bar_percents.get(bar_kind, 0.0), 0.0), 100.0)
+        inner_left = 1
+        inner_right = max(inner_left, width - 1)
+        inner_width = max(0, inner_right - inner_left)
+        fill_right = inner_left + round(inner_width * percent / 100.0)
+        language_lines = self.progress_language_lines.get(bar_kind, {})
+        items = [
+            (name, language_lines[name])
+            for name in PROJECT_LANGUAGE_ORDER
+            if language_lines.get(name, 0) > 0
+        ]
+        total = sum(value for _, value in items)
+        segments: list[tuple[int, int, str]] = []
+
+        if fill_right > inner_left and total > 0:
+            cumulative = 0
+            left = inner_left
+            for index, (language, value) in enumerate(items):
+                cumulative += value
+                right = fill_right if index == len(items) - 1 else inner_left + round((cumulative / total) * (fill_right - inner_left))
+                right = min(fill_right, max(left, right))
+                if right <= left:
+                    continue
+                color = self.project_language_color(language)
+                canvas.create_rectangle(left, 1, right, height - 1, fill=color, outline="")
+                segments.append((left, right, language))
+                left = right
+        elif fill_right > inner_left:
+            canvas.create_rectangle(inner_left, 1, fill_right, height - 1, fill=fallback_color, outline="")
+
+        self.progress_bar_segments[bar_kind] = segments
+        canvas.create_rectangle(0, 0, width - 1, height - 1, outline=palette.border)
+
+        text_value = self.progress_bar_texts.get(bar_kind, "")
+        if text_value:
+            center_x = width // 2
+            text_background = trough_color
+            if inner_left <= center_x < fill_right:
+                text_background = fallback_color
+                for left, right, language in segments:
+                    if left <= center_x < right:
+                        text_background = self.project_language_color(language)
+                        break
+            canvas.create_text(
+                width / 2,
+                height / 2,
+                text=text_value,
+                fill=contrast_text_color(text_background),
+                font=("Bahnschrift", 9, "bold"),
+            )
+
+    def on_progress_bar_motion(self, event: tk.Event, bar_kind: str) -> None:
+        language = ""
+        for left, right, segment_language in self.progress_bar_segments.get(bar_kind, []):
+            if left <= event.x < right:
+                language = segment_language
+                break
+        hover_key = f"{bar_kind}:{language}" if language else ""
+        if hover_key == self.progress_language_hover_key:
+            return
+        if not language:
+            self.hide_progress_language_tooltip()
+            return
+        self.show_progress_language_tooltip(event.widget, bar_kind, language)
+
+    def show_progress_language_tooltip(self, widget: tk.Misc, bar_kind: str, language: str) -> None:
+        language_lines = self.progress_language_lines.get(bar_kind, {})
+        value = language_lines.get(language, 0)
+        total = sum(language_lines.values())
+        if value <= 0 or total <= 0:
+            return
+
+        self.hide_progress_language_tooltip()
+        self.progress_language_hover_key = f"{bar_kind}:{language}"
+        palette = self.theme
+        tooltip = tk.Toplevel(self.root)
+        tooltip.withdraw()
+        tooltip.overrideredirect(True)
+        try:
+            tooltip.attributes("-topmost", True)
+        except tk.TclError:
+            pass
+        tooltip.configure(bg=palette.border)
+        self.progress_language_tooltip = tooltip
+
+        card = tk.Frame(tooltip, bg=palette.card_bg, padx=10, pady=8)
+        card.pack(padx=1, pady=1)
+        scope = self.t("project_language_breakdown") if bar_kind == "overall" else self.t("daily_progress")
+        title = tk.Label(
+            card,
+            text=f"{scope} · {language}",
+            bg=palette.card_bg,
+            fg=palette.text,
+            font=("Bahnschrift", 10, "bold"),
+            anchor="w",
+        )
+        title.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+
+        swatch = tk.Frame(card, bg=self.project_language_color(language), width=9, height=28)
+        swatch.grid(row=1, column=0, sticky="nsw", padx=(0, 8), pady=2)
+        swatch.grid_propagate(False)
+        percent = (value / total) * 100.0
+        extensions = self.project_language_extensions(language)
+        detail = tk.Label(
+            card,
+            text=f"{value:,}{self.t('lines_suffix')} ({percent:.1f}%)\n{extensions}",
+            bg=palette.card_bg,
+            fg=palette.text,
+            justify="left",
+            anchor="w",
+            font=("Bahnschrift", 9),
+        )
+        detail.grid(row=1, column=1, sticky="w", pady=2)
+
+        try:
+            x_pos = widget.winfo_pointerx() + 12
+            y_pos = widget.winfo_pointery() + 14
+            tooltip.geometry(f"+{x_pos}+{y_pos}")
+            tooltip.deiconify()
+            tooltip.lift()
+        except tk.TclError:
+            self.hide_progress_language_tooltip()
+
+    def hide_progress_language_tooltip(self) -> None:
+        tooltip = getattr(self, "progress_language_tooltip", None)
+        self.progress_language_tooltip = None
+        self.progress_language_hover_key = ""
+        if tooltip is not None:
+            try:
+                tooltip.destroy()
+            except tk.TclError:
+                pass
 
     def format_output_lines(self, result: TrackerResult) -> list[str]:
         month_label = self.format_month_label(result.month_end.month)
@@ -1682,31 +1897,40 @@ class LineTrackerApp:
         result: TrackerResult,
         branch_total: int,
         branch_deletions: int,
+        branch_active_days: int,
+        overall_active_days: int,
         overall_deletions: int,
         uncommitted_deletions: int,
+        daily_commit_count: int,
+        branch_commit_count: int,
+        overall_commit_count: int,
+        project_total_lines: int,
         share_text: str,
     ) -> None:
-        month_label = self.format_month_label(result.month_end.month)
-        self.meta_label_vars[0].set(self.t("today_label"))
-        self.meta_value_vars[0].set(result.today.isoformat())
-        self.meta_label_vars[1].set(self.t("days_left_label", month=month_label))
-        self.meta_value_vars[1].set(f"{result.days_left_including_today}{self.t('day_suffix')}")
+        self.title_date_var.set(result.today.isoformat())
         self.daily_stats_added_var.set(f"+{result.uncommitted_insertions:,}")
         self.daily_stats_removed_var.set(f"-{uncommitted_deletions:,}")
+        self.daily_stats_commit_var.set(f"{daily_commit_count:,} commit")
         self.branch_stats_added_var.set(f"+{branch_total:,}")
         self.branch_stats_removed_var.set(f"-{branch_deletions:,}")
+        self.branch_stats_commit_var.set(f"{branch_commit_count:,} commit")
         self.overall_stats_added_var.set(f"+{result.committed_total + result.uncommitted_insertions:,}")
         self.overall_stats_removed_var.set(f"-{overall_deletions + uncommitted_deletions:,}")
+        self.overall_stats_commit_var.set(f"{overall_commit_count:,} commit")
 
         branch_value = f"{branch_total:,}{self.t('lines_suffix')}" if branch_total is not None else ""
         tiles = [
             (self.t("daily_required_label"), f"{result.need_today}{self.t('per_day_suffix')}"),
             (self.t("after_commit_daily_label"), f"{result.need_after_commit}{self.t('per_day_suffix')}"),
             (self.t("branch_only_label"), branch_value),
+            (self.t("branch_active_days_label"), f"{branch_active_days:,}{self.t('day_suffix')}"),
+            (self.t("project_total_label"), f"{project_total_lines:,}{self.t('lines_suffix')}"),
             (self.t("share_label"), share_text),
+            (self.t("user_total_label"), f"{result.committed_total + result.uncommitted_insertions:,}{self.t('lines_suffix')}"),
+            (self.t("user_active_days_label"), f"{overall_active_days:,}{self.t('day_suffix')}"),
         ]
 
-        for idx in range(5):
+        for idx in range(8):
             label, value = tiles[idx] if idx < len(tiles) else ("", "")
             if idx == 1 and not value:
                 label = ""
@@ -1715,40 +1939,57 @@ class LineTrackerApp:
 
     def apply_language(self) -> None:
         self.root.title(format_app_title(self.t("window_title")))
+        self.hide_progress_language_tooltip()
         self.refresh_custom_titlebar()
         self.title_label.configure(text=self.get_header_project_title())
-        self.lang_label.configure(text=self.t("lang_label"))
-        self.theme_label.configure(text=self.t("theme_label"))
-        self.repo_header_label.configure(text=self.t("repo_label"))
-        self.repo_apply_button.configure(text=self.t("repo_select"))
+        self.title_date_label.grid_configure(padx=(self.layout_metrics.header_group_gap, 0))
+        if hasattr(self, "lang_label"):
+            self.lang_label.configure(text=self.t("lang_label"))
+        if hasattr(self, "theme_label"):
+            self.theme_label.configure(text=self.t("theme_label"))
+        if hasattr(self, "repo_header_label"):
+            self.repo_header_label.configure(text=self.t("repo_label"))
+        if hasattr(self, "repo_apply_button"):
+            self.repo_apply_button.configure(text=self.t("repo_select"))
         self.refresh_theme_selector()
         self.refresh_ref_label()
+        self.redraw_app_settings_button()
 
         self.graph_title.configure(text=self.t("graph_title"))
-        self.graph_days_label.configure(text=self.t("graph_period"))
-        self.memo_tab_button.configure(text=self.t("tab_memo"))
-        self.grass_tab_button.configure(text=self.t("tab_grass"))
+        self.redraw_graph_settings_button()
+        self.commit_history_title.configure(text=self.t("commit_history_section"))
+        self.show_note_tab(self.active_note_tab, persist=False)
         self.daily_stats_label.configure(text=self.t("daily_stats_section"))
         self.branch_stats_label.configure(text=self.t("branch_stats_section"))
         self.overall_stats_label.configure(text=self.t("overall_stats_section"))
-        if self.memo_panel_controller is not None:
-            self.memo_panel_controller.apply_language()
+        self.user_stats_label.configure(text=self.t("user_stats_section"))
         if self.grass_panel_controller is not None:
             self.grass_panel_controller.apply_language()
+        if self.schedule_panel_controller is not None:
+            self.schedule_panel_controller.apply_language()
         self.freeze_note_panel_size()
 
-        self.controls_title.configure(text=self.t("settings"))
-        self.custom_today_check.configure(text=self.t("custom_date"))
-        self.today_apply_button.configure(text=self.t("apply_date"))
-        self.goal_label.configure(text=self.t("goal_label"))
-        self.goal_apply_button.configure(text=self.t("apply_goal"))
-        self.author_label.configure(text=self.t("author_label"))
-        self.author_apply_button.configure(text=self.t("apply_author"))
-        self.auto_refresh_check.configure(text=self.t("auto_refresh"))
+        if hasattr(self, "controls_title"):
+            self.controls_title.configure(text=self.t("settings"))
+        if hasattr(self, "custom_today_check"):
+            self.custom_today_check.configure(text=self.t("custom_date"))
+        if hasattr(self, "today_apply_button"):
+            self.today_apply_button.configure(text=self.t("apply_date"))
+        if hasattr(self, "goal_label"):
+            self.goal_label.configure(text=self.t("goal_label"))
+        if hasattr(self, "goal_apply_button"):
+            self.goal_apply_button.configure(text=self.t("apply_goal"))
+        if hasattr(self, "author_label"):
+            self.author_label.configure(text=self.t("author_label"))
+        if hasattr(self, "author_apply_button"):
+            self.author_apply_button.configure(text=self.t("apply_author"))
+        if hasattr(self, "auto_refresh_check"):
+            self.auto_refresh_check.configure(text=self.t("auto_refresh"))
 
         self.progress_title.configure(text=self.t("progress"))
         self.overall_progress_title.configure(text=self.t("overall_progress"))
         self.daily_progress_title.configure(text=self.t("daily_progress"))
+        self.redraw_progress_bars()
         self.redraw_compact_launch_button()
         self.refresh_button.configure(text=self.t("refresh"))
         self.copy_button.configure(text=self.t("copy"))
@@ -1765,7 +2006,9 @@ class LineTrackerApp:
         self.refresh_compact_display()
 
         self.rebuild_author_controls(reset_invalid_to_auto=False)
-        self.refresh_note_tab_buttons()
+        self.refresh_graph_settings_window()
+        self.refresh_app_settings_window()
+        self.redraw_graph()
 
         if self.refresh_in_progress:
             self.loading_var.set(self.t("loading"))
@@ -1880,6 +2123,129 @@ class LineTrackerApp:
         self.last_window_geometry = current_geometry
         self.root.geometry(current_geometry)
 
+    def refresh_layout_metrics(self) -> None:
+        m = self.layout_metrics
+        if hasattr(self, "header_frame"):
+            self.header_frame.grid_configure(pady=(0, m.header_gap))
+        if hasattr(self, "header_accent_bar"):
+            self.header_accent_bar.grid_configure(padx=(0, m.header_group_gap))
+        if hasattr(self, "subtitle_label"):
+            self.subtitle_label.grid_configure(pady=(m.header_subtitle_gap, 0))
+        if hasattr(self, "lang_header"):
+            self.lang_header.grid_configure(padx=(0, m.header_group_gap))
+        if hasattr(self, "theme_header"):
+            self.theme_header.grid_configure(padx=(0, m.header_group_gap))
+        if hasattr(self, "repo_apply_button"):
+            self.repo_apply_button.grid_configure(padx=(m.control_large_gap, 0))
+        if hasattr(self, "stats_scroll_host"):
+            self.stats_scroll_host.grid_configure(padx=(0, m.header_group_gap))
+        if hasattr(self, "output_section"):
+            self.output_section.grid_configure(padx=(0, 0))
+        if hasattr(self, "daily_stats_header"):
+            self.daily_stats_header.grid_configure(pady=(0, m.section_title_gap))
+        if hasattr(self, "lower_stats_stack"):
+            self.lower_stats_stack.grid_configure(pady=(m.section_gap, 0))
+        if hasattr(self, "branch_stats_header"):
+            self.branch_stats_header.grid_configure(pady=(0, m.section_title_gap))
+        if hasattr(self, "overall_stats_section"):
+            self.overall_stats_section.grid_configure(pady=(m.section_gap, 0))
+        if hasattr(self, "overall_stats_header"):
+            self.overall_stats_header.grid_configure(pady=(0, m.section_title_gap))
+        if hasattr(self, "user_stats_section"):
+            self.user_stats_section.grid_configure(pady=(m.section_gap, 0))
+        if hasattr(self, "user_stats_header"):
+            self.user_stats_header.grid_configure(pady=(0, m.section_title_gap))
+        for tile in getattr(self, "tile_frames", []):
+            tile.configure(padding=(m.tile_pad_x, m.tile_pad_y))
+            info = tile.grid_info()
+            row = int(info.get("row", 0))
+            col = int(info.get("column", 0))
+            colspan = int(info.get("columnspan", 1))
+            tile.grid_configure(
+                padx=(0, m.tile_gap_x) if col == 0 and colspan == 1 else (0, 0),
+                pady=(0, m.tile_gap_y) if row == 0 else (0, 0),
+            )
+        if hasattr(self, "progress_section"):
+            self.progress_section.grid_configure(padx=(0, 0), pady=(m.section_gap, 0))
+        if hasattr(self, "title_date_label"):
+            self.title_date_label.grid_configure(padx=(m.header_group_gap, 0))
+        if hasattr(self, "progress_title"):
+            self.progress_title.grid_configure(pady=(0, m.section_title_gap + 1))
+        if hasattr(self, "progress_card"):
+            self.progress_card.configure(padding=(m.card_pad_x, m.card_pad_y))
+        if hasattr(self, "overall_progress_bar"):
+            self.overall_progress_bar.grid_configure(pady=(m.card_inner_gap, 0))
+        if hasattr(self, "overall_progress_text_label"):
+            self.overall_progress_text_label.grid_configure(pady=(m.control_small_gap, 0))
+        if hasattr(self, "daily_progress_title"):
+            self.daily_progress_title.grid_configure(pady=(m.progress_block_gap, 0))
+        if hasattr(self, "daily_progress_bar"):
+            self.daily_progress_bar.grid_configure(pady=(m.card_inner_gap, 2))
+        if hasattr(self, "right_area"):
+            self.right_area.grid_configure(padx=(m.panel_gap_x, 0))
+        if hasattr(self, "commit_history_section"):
+            self.commit_history_section.grid_configure(padx=(0, m.header_group_gap), pady=(m.section_gap, 0))
+        if hasattr(self, "commit_history_title"):
+            self.commit_history_title.grid_configure(pady=(0, m.section_title_gap + 1))
+        if hasattr(self, "commit_history_card"):
+            self.commit_history_card.configure(padding=(m.card_pad_x, m.card_pad_y))
+        if hasattr(self, "graph_section"):
+            self.graph_section.grid_configure(padx=(0, m.header_group_gap))
+        if hasattr(self, "graph_header"):
+            self.graph_header.grid_configure(pady=(0, m.note_tab_gap))
+        if hasattr(self, "graph_card"):
+            self.graph_card.configure(padding=(m.card_pad_x, m.card_pad_y))
+        if hasattr(self, "graph_canvas"):
+            self.graph_canvas.grid_configure(pady=(max(1, m.tile_value_gap), 0))
+        if hasattr(self, "graph_summary_label"):
+            self.graph_summary_label.grid_configure(pady=(m.card_inner_gap, 0))
+        if hasattr(self, "note_section"):
+            self.note_section.grid_configure(padx=(m.header_group_gap, 0))
+        if hasattr(self, "note_tabs"):
+            self.note_tabs.grid_configure(pady=(0, m.note_tab_gap))
+        if hasattr(self, "grass_tab_button"):
+            self.grass_tab_button.grid_configure(padx=(m.note_tab_gap, 0))
+        if hasattr(self, "note_card"):
+            self.note_card.configure(padding=(m.card_pad_x, m.card_pad_y))
+        if hasattr(self, "controls_section"):
+            self.controls_section.grid_configure(padx=(0, m.header_group_gap))
+        if hasattr(self, "controls_title"):
+            self.controls_title.grid_configure(pady=(0, m.section_title_gap + 1))
+        if hasattr(self, "controls_card"):
+            self.controls_card.configure(padding=(m.card_pad_x, m.card_pad_y))
+        if hasattr(self, "custom_today_check"):
+            self.custom_today_check.grid_configure(pady=(m.control_large_gap, 0))
+        if hasattr(self, "today_entry"):
+            self.today_entry.grid_configure(pady=(m.control_small_gap, 0))
+        if hasattr(self, "today_apply_button"):
+            self.today_apply_button.grid_configure(padx=(m.control_large_gap, 0), pady=(m.control_small_gap, 0))
+        if hasattr(self, "goal_label"):
+            self.goal_label.grid_configure(pady=(m.control_large_gap, 0))
+        if hasattr(self, "goal_entry"):
+            self.goal_entry.grid_configure(pady=(m.control_small_gap, 0))
+        if hasattr(self, "goal_apply_button"):
+            self.goal_apply_button.grid_configure(padx=(m.control_large_gap, 0), pady=(m.control_small_gap, 0))
+        if hasattr(self, "author_label"):
+            self.author_label.grid_configure(pady=(m.control_large_gap, 0))
+        if hasattr(self, "author_combo"):
+            self.author_combo.grid_configure(pady=(m.control_small_gap, 0))
+        if hasattr(self, "author_apply_button"):
+            self.author_apply_button.grid_configure(padx=(m.control_large_gap, 0), pady=(m.control_small_gap, 0))
+        if hasattr(self, "auto_refresh_check"):
+            self.auto_refresh_check.grid_configure(pady=(m.control_large_gap, 0))
+        if hasattr(self, "footer_frame"):
+            self.footer_frame.grid_configure(pady=(m.footer_gap, 0))
+        if hasattr(self, "loading_label"):
+            self.loading_label.grid_configure(pady=(m.section_gap, 0))
+        if hasattr(self, "loading_bar"):
+            self.loading_bar.grid_configure(padx=(m.section_gap, 0), pady=(m.section_gap, 0))
+        if hasattr(self, "loading_detail_label"):
+            self.loading_detail_label.grid_configure(padx=(0, m.header_group_gap))
+        if hasattr(self, "refresh_button"):
+            self.refresh_button.grid_configure(padx=(m.tile_gap_x, 0))
+        if hasattr(self, "copy_button"):
+            self.copy_button.grid_configure(padx=(m.tile_gap_x, 0))
+
     def apply_responsive_layout(self) -> None:
         try:
             self.root.update_idletasks()
@@ -1910,18 +2276,21 @@ class LineTrackerApp:
 
     def _apply_responsive_scale(self, scale: float) -> None:
         self.layout_scale = min(max(scale, 0.55), 1.0)
+        self.layout_metrics = build_layout_metrics(self.layout_scale)
         self.graph_canvas_width = max(300, int(round(GRAPH_CANVAS_WIDTH * self.layout_scale)))
         self.progress_bar_length = max(300, int(round(BAR_LENGTH * self.layout_scale)))
         self.tile_min_width = max(180, int(round(BASE_TILE_MIN_WIDTH * self.layout_scale)))
         self.tile_wrap = max(170, int(round(BASE_TILE_LABEL_WRAP * self.layout_scale)))
         self.repo_entry_width = max(28, int(round(RESPONSIVE_REPO_ENTRY_WIDTH * self.layout_scale)))
+        self.refresh_layout_metrics()
+        self.update_left_panel_width()
 
         if hasattr(self, "repo_entry"):
             self.repo_entry.configure(width=self.repo_entry_width)
         if hasattr(self, "overall_progress_bar"):
-            self.overall_progress_bar.configure(length=self.progress_bar_length)
+            self.overall_progress_bar.configure(width=self.progress_bar_length)
         if hasattr(self, "daily_progress_bar"):
-            self.daily_progress_bar.configure(length=self.progress_bar_length)
+            self.daily_progress_bar.configure(width=self.progress_bar_length)
         if hasattr(self, "graph_canvas"):
             self.graph_canvas.configure(width=self.graph_canvas_width, height=GRAPH_CANVAS_HEIGHT)
 
@@ -1931,16 +2300,12 @@ class LineTrackerApp:
         if hasattr(self, "controls_section"):
             self.controls_section.columnconfigure(0, minsize=graph_column_width)
 
-        memo_panel_controller = getattr(self, "memo_panel_controller", None)
-        if memo_panel_controller is not None:
-            memo_panel_controller.set_panel_width_hint(max(280, int(round(NOTE_CARD_WIDTH * self.layout_scale))))
-
         grass_panel_controller = getattr(self, "grass_panel_controller", None)
         if grass_panel_controller is not None:
             grass_panel_controller.set_layout_scale(self.layout_scale)
 
         if getattr(self, "graph_highlight_day", None) is not None and hasattr(self, "graph_canvas"):
-            self.draw_daily_graph(getattr(self, "graph_points", []), self.graph_highlight_day)
+            self.redraw_graph()
 
     def apply_color_palette(self) -> None:
         self.root.configure(bg=self.theme.app_bg)
@@ -1985,6 +2350,9 @@ class LineTrackerApp:
             return
 
     def show_main_window(self) -> None:
+        if self.capture_mode:
+            self._show_capture_window_no_activate()
+            return
         try:
             self.root.deiconify()
             self.root.lift()
@@ -1992,6 +2360,45 @@ class LineTrackerApp:
             return
         if self.use_custom_titlebar:
             self.root.after(20, self.promote_appwindow_style)
+
+    def _show_capture_window_no_activate(self) -> None:
+        """Render the real window on an isolated desktop without taking focus."""
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+
+            self.root.update_idletasks()
+            user32 = ctypes.windll.user32
+            hwnd = user32.GetAncestor(self.root.winfo_id(), 2)
+            if not hwnd:
+                return
+
+            width = max(1, self.root.winfo_width())
+            height = max(1, self.root.winfo_height())
+            x_pos = 0
+            y_pos = 0
+            self.root.geometry(f"{width}x{height}{x_pos:+d}{y_pos:+d}")
+            self.root.update_idletasks()
+
+            ex_style = user32.GetWindowLongW(hwnd, -20)
+            ex_style = (ex_style | 0x08000000 | 0x00000080) & ~0x00040000
+            user32.SetWindowLongW(hwnd, -20, ex_style)
+            self.root.deiconify()
+            user32.SetWindowPos(
+                hwnd,
+                1,  # HWND_BOTTOM
+                x_pos,
+                y_pos,
+                width,
+                height,
+                0x0010 | 0x0040 | 0x0020,  # NOACTIVATE | SHOWWINDOW | FRAMECHANGED
+            )
+            user32.ShowWindow(hwnd, 4)  # SW_SHOWNOACTIVATE
+            user32.UpdateWindow(hwnd)
+            self.root.update()
+        except (AttributeError, OSError, tk.TclError):
+            return
 
     def apply_window_chrome_theme(self) -> None:
         if self.use_custom_titlebar:
@@ -2083,7 +2490,12 @@ class LineTrackerApp:
         self.style.configure("Section.TLabel", background=palette.app_bg, foreground=palette.text, font=FONT_SECTION)
         self.style.configure("SectionDeltaAdd.TLabel", background=palette.app_bg, foreground=palette.success, font=FONT_SUBTITLE)
         self.style.configure("SectionDeltaRemove.TLabel", background=palette.app_bg, foreground=palette.danger, font=FONT_SUBTITLE)
+        self.style.configure("SectionCommit.TLabel", background=palette.app_bg, foreground=palette.muted_text, font=FONT_SUBTITLE)
         self.style.configure("CardTitle.TLabel", background=palette.card_bg, foreground=palette.text, font=FONT_BODY)
+        self.style.configure("CardDeltaAdd.TLabel", background=palette.card_bg, foreground=palette.success, font=FONT_BODY)
+        self.style.configure("CardDeltaRemove.TLabel", background=palette.card_bg, foreground=palette.danger, font=FONT_BODY)
+        self.style.configure("SettingsTitle.TLabel", background=palette.card_bg, foreground=palette.text, font=FONT_SECTION)
+        self.style.configure("SettingsLabel.TLabel", background=palette.card_bg, foreground=palette.muted_text, font=FONT_BODY)
         self.style.configure("CompactTitle.TLabel", background=palette.card_bg, foreground=palette.text, font=FONT_SECTION)
         self.style.configure("CardLabel.TLabel", background=palette.card_bg, foreground=palette.muted_text, font=FONT_BODY)
         self.style.configure("CompactLabel.TLabel", background=palette.card_bg, foreground=palette.muted_text, font=FONT_CHIP)
@@ -2292,6 +2704,34 @@ class LineTrackerApp:
         self.style.configure("ChipValue.TLabel", background=palette.card_bg, foreground=palette.text, font=FONT_CHIP)
         self.style.configure("TCheckbutton", background=palette.card_bg, foreground=palette.text, font=FONT_BODY)
         self.style.map("TCheckbutton", background=[("active", palette.card_bg)])
+        self.style.configure(
+            "Settings.TNotebook",
+            background=palette.card_bg,
+            borderwidth=0,
+            tabmargins=(0, 4, 0, 0),
+        )
+        self.style.configure(
+            "Settings.TNotebook.Tab",
+            background=blend_hex(palette.card_bg, palette.app_bg, 0.16),
+            foreground=palette.muted_text,
+            bordercolor=palette.border,
+            lightcolor=palette.card_bg,
+            darkcolor=palette.card_bg,
+            focuscolor=palette.card_bg,
+            padding=(12, 6),
+            font=FONT_BODY,
+        )
+        self.style.map(
+            "Settings.TNotebook.Tab",
+            background=[
+                ("selected", blend_hex(palette.card_bg, palette.accent_light, 0.16)),
+                ("active", blend_hex(palette.card_bg, palette.accent_light, 0.1)),
+            ],
+            foreground=[
+                ("selected", palette.text),
+                ("active", palette.text),
+            ],
+        )
         entry_bg = blend_hex(palette.card_bg, palette.app_bg, 0.18)
         entry_focus_bg = blend_hex(palette.card_bg, palette.accent_light, 0.1)
         entry_border = blend_hex(palette.border, palette.accent_light, 0.32)
@@ -2591,20 +3031,6 @@ class LineTrackerApp:
             bordercolor=[("active", palette.accent_dark)],
         )
         self.style.configure(
-            "Overall.Horizontal.TProgressbar",
-            troughcolor=palette.overall_progress_trough,
-            background=palette.accent,
-            lightcolor=palette.accent,
-            darkcolor=palette.accent,
-        )
-        self.style.configure(
-            "Daily.Horizontal.TProgressbar",
-            troughcolor=palette.daily_progress_trough,
-            background=palette.accent_alt,
-            lightcolor=palette.accent_alt,
-            darkcolor=palette.accent_alt,
-        )
-        self.style.configure(
             "Compact.Horizontal.TProgressbar",
             troughcolor=palette.graph_grid,
             background=palette.accent_alt,
@@ -2657,19 +3083,31 @@ class LineTrackerApp:
             self.redraw_compact_strip_progress()
         if hasattr(self, "compact_button"):
             self.redraw_compact_launch_button()
+        if hasattr(self, "app_settings_button"):
+            self.redraw_app_settings_button()
+        if hasattr(self, "graph_settings_button"):
+            self.redraw_graph_settings_button()
         if hasattr(self, "graph_canvas"):
             self.graph_canvas.configure(bg=palette.canvas_bg, highlightbackground=palette.border)
-        memo_panel_controller = getattr(self, "memo_panel_controller", None)
-        if memo_panel_controller is not None:
-            memo_panel_controller.apply_theme()
+        if hasattr(self, "overall_progress_bar"):
+            self.redraw_progress_bars()
+        stats_scroll_panel = getattr(self, "stats_scroll_panel", None)
+        if stats_scroll_panel is not None:
+            stats_scroll_panel.apply_theme(canvas_bg=palette.app_bg)
+        commit_history_scroll_panel = getattr(self, "commit_history_scroll_panel", None)
+        if commit_history_scroll_panel is not None:
+            commit_history_scroll_panel.apply_theme(canvas_bg=palette.card_bg)
         grass_panel_controller = getattr(self, "grass_panel_controller", None)
         if grass_panel_controller is not None:
             grass_panel_controller.apply_theme()
-        if hasattr(self, "memo_tab_button"):
-            self.refresh_note_tab_buttons()
+        schedule_panel_controller = getattr(self, "schedule_panel_controller", None)
+        if schedule_panel_controller is not None:
+            schedule_panel_controller.apply_theme()
+        self.refresh_graph_settings_window()
+        self.refresh_app_settings_window()
         graph_highlight_day = getattr(self, "graph_highlight_day", None)
         if graph_highlight_day is not None and hasattr(self, "graph_canvas"):
-            self.draw_daily_graph(getattr(self, "graph_points", []), graph_highlight_day)
+            self.redraw_graph()
 
     def ensure_repo_ready(self) -> bool:
         git_version, _, _ = get_git_info()
@@ -2685,190 +3123,15 @@ class LineTrackerApp:
 
     @staticmethod
     def _parse_author_identity(identity: str) -> tuple[str | None, str | None]:
-        match = AUTHOR_IDENTITY_RE.fullmatch(identity.strip())
-        if not match:
-            cleaned = identity.strip()
-            return (cleaned or None), None
-        name = match.group("name").strip() or None
-        email = match.group("email").strip() or None
-        return name, email
+        return parse_author_identity(identity)
 
     @staticmethod
-    def _parse_email_parts(email: str | None) -> tuple[str | None, str | None]:
-        if not email:
-            return None, None
-        if "@" not in email:
-            return email.strip() or None, None
-        local_part, domain = email.rsplit("@", 1)
-        local = local_part.strip() or None
-        normalized_domain = domain.strip().casefold() or None
-        return local, normalized_domain
-
-    @staticmethod
-    def _normalize_author_handle(value: str | None) -> str | None:
-        if not value:
-            return None
-        cleaned = value.strip()
-        if not cleaned or not AUTHOR_HANDLE_RE.fullmatch(cleaned):
-            return None
-        return cleaned.casefold()
-
-    @classmethod
-    def _extract_author_merge_keys(
-        cls,
-        identity: str,
-        name: str | None,
-        email: str | None,
-    ) -> list[str]:
-        merge_keys: list[str] = []
-        if email:
-            merge_keys.append(f"email:{email.casefold()}")
-
-        normalized_name = cls._normalize_author_handle(name)
-        email_local, email_domain = cls._parse_email_parts(email)
-        normalized_local = cls._normalize_author_handle(email_local)
-
-        if normalized_name and normalized_local and normalized_name == normalized_local:
-            merge_keys.append(f"handle:{normalized_name}")
-
-        if email_domain == GITHUB_NOREPLY_DOMAIN and email_local:
-            github_handle_source = email_local.rsplit("+", 1)[-1]
-            github_handle = cls._normalize_author_handle(github_handle_source)
-            if github_handle and (normalized_name is None or normalized_name == github_handle):
-                merge_keys.append(f"handle:{github_handle}")
-
-        if not email and normalized_name:
-            merge_keys.append(f"name:{normalized_name}")
-
-        if not merge_keys:
-            merge_keys.append(f"identity:{identity.casefold()}")
-        return list(dict.fromkeys(merge_keys))
-
-    @classmethod
-    def _author_display_priority(cls, name: str | None, email: str | None) -> tuple[int, int]:
-        email_local, email_domain = cls._parse_email_parts(email)
-        normalized_name = cls._normalize_author_handle(name)
-        normalized_local = cls._normalize_author_handle(email_local)
-
-        priority = 0
-        if email:
-            priority = 3
-            if email_domain == GITHUB_NOREPLY_DOMAIN:
-                priority = 1
-            elif normalized_name and normalized_local and normalized_name == normalized_local:
-                priority = 4
-        elif normalized_name:
-            priority = 2
-
-        display_length = len((name or "") + (email or ""))
-        return priority, -display_length
-
-    @classmethod
     def _build_author_option_entries(
-        cls,
         identities: list[str],
         auto_label: str,
         all_label: str,
     ) -> tuple[list[str], dict[str, str], dict[str, str]]:
-        options = [auto_label, all_label]
-        mapping = {auto_label: "auto", all_label: ""}
-        aliases = {"auto": auto_label, "": all_label}
-
-        parsed_identities: list[dict[str, object]] = []
-        key_to_indices: dict[str, list[int]] = {}
-
-        for raw_identity in identities:
-            identity = raw_identity.strip()
-            if not identity:
-                continue
-
-            name, email = cls._parse_author_identity(identity)
-            merge_keys = cls._extract_author_merge_keys(identity, name, email)
-            item = {
-                "identity": identity,
-                "name": name,
-                "email": email,
-                "merge_keys": merge_keys,
-            }
-            index = len(parsed_identities)
-            parsed_identities.append(item)
-            for key in merge_keys:
-                key_to_indices.setdefault(key, []).append(index)
-
-        groups: list[dict[str, object]] = []
-        visited: set[int] = set()
-        for start_index, item in enumerate(parsed_identities):
-            if start_index in visited:
-                continue
-
-            stack = [start_index]
-            component_indices: list[int] = []
-            while stack:
-                index = stack.pop()
-                if index in visited:
-                    continue
-                visited.add(index)
-                component_indices.append(index)
-                for merge_key in parsed_identities[index]["merge_keys"]:
-                    for linked_index in key_to_indices.get(str(merge_key), []):
-                        if linked_index not in visited:
-                            stack.append(linked_index)
-
-            component_indices.sort()
-            component = [parsed_identities[index] for index in component_indices]
-            display_item = component[0]
-            best_priority = cls._author_display_priority(
-                display_item.get("name"),
-                display_item.get("email"),
-            )
-            for candidate in component[1:]:
-                candidate_priority = cls._author_display_priority(
-                    candidate.get("name"),
-                    candidate.get("email"),
-                )
-                if candidate_priority > best_priority:
-                    display_item = candidate
-                    best_priority = candidate_priority
-
-            group = {
-                "display": str(display_item["identity"]),
-                "identities": [],
-                "emails": [],
-            }
-            for candidate in component:
-                identity = str(candidate["identity"])
-                email = candidate.get("email")
-                if identity not in group["identities"]:
-                    group["identities"].append(identity)
-                if email and email not in group["emails"]:
-                    group["emails"].append(email)
-            groups.append(group)
-
-        for group in groups:
-            display = str(group["display"])
-            if display in mapping:
-                continue
-
-            emails = [value for value in group["emails"] if value]
-            identities_for_filter = emails or [value for value in group["identities"] if value]
-            if not identities_for_filter:
-                continue
-
-            escaped_patterns = [re.escape(value) for value in identities_for_filter]
-            filter_value = encode_author_patterns(escaped_patterns)
-            mapping[display] = filter_value
-            options.append(display)
-            aliases[filter_value] = display
-            legacy_filter_value = "|".join(escaped_patterns)
-            if legacy_filter_value:
-                aliases[legacy_filter_value] = display
-
-            for alias_source in group["identities"]:
-                aliases[re.escape(alias_source)] = display
-            for alias_source in group["emails"]:
-                aliases[re.escape(alias_source)] = display
-
-        return options, mapping, aliases
+        return build_author_option_entries(identities, auto_label, all_label)
 
     def build_author_options(self) -> tuple[list[str], dict[str, str], dict[str, str]]:
         auto_label = self.t("author_auto")
@@ -2878,21 +3141,7 @@ class LineTrackerApp:
         except RuntimeError:
             return self._build_author_option_entries([], auto_label, all_label)
 
-        identities: list[str] = []
-        for raw_line in out.splitlines():
-            line = raw_line.strip()
-            if not line:
-                continue
-            if "\t" in line:
-                _, identity = line.split("\t", 1)
-            else:
-                parts = line.split(None, 1)
-                if len(parts) < 2:
-                    continue
-                identity = parts[1]
-            identity = identity.strip()
-            if identity:
-                identities.append(identity)
+        identities = parse_shortlog_identities(out)
         return self._build_author_option_entries(identities, auto_label, all_label)
 
     def map_author_to_display(self, author_raw: str) -> str:
@@ -3229,13 +3478,17 @@ class LineTrackerApp:
             compact_strip_text = f"{snapshot.today_done:,}/{snapshot.today_done:,} [100%]"
         else:
             daily_percent = (snapshot.today_done / today_target) * 100.0
+            daily_percent_text = self.format_progress_percent(
+                daily_percent,
+                complete=snapshot.today_done >= today_target,
+            )
             compact_progress_text = self.t(
                 "compact_progress_value_text",
-                percent=f"{daily_percent:.0f}",
+                percent=daily_percent_text,
                 done=f"{snapshot.today_done:,}",
                 target=f"{today_target:,}",
             )
-            compact_strip_text = f"{snapshot.today_done:,}/{today_target:,} [{daily_percent:.0f}%]"
+            compact_strip_text = f"{snapshot.today_done:,}/{today_target:,} [{daily_percent_text}%]"
         self.compact_progress_value.set(max(0.0, min(100.0, daily_percent)))
         self.compact_progress_var.set(compact_progress_text)
         self.compact_strip_summary_var.set("")
@@ -3319,45 +3572,33 @@ class LineTrackerApp:
             self.apply_window_chrome_theme()
 
     def load_settings(self) -> UISettings:
-        for candidate in (self.settings_path, self.legacy_settings_path):
-            if not candidate.exists():
-                continue
-            try:
-                raw = candidate.read_text(encoding="utf-8")
-                data = json.loads(raw)
-                if isinstance(data, dict):
-                    return UISettings.from_dict(data)
-            except (OSError, json.JSONDecodeError):
-                continue
-        return UISettings()
+        return load_ui_settings(self.settings_path, self.legacy_settings_path)
 
     def save_settings(self) -> None:
-        memo_text = self.memo_panel_controller.get_text() if self.memo_panel_controller is not None else self.memo_text_value
+        if self.capture_mode:
+            return
         self.settings = UISettings(
             goal=self.goal,
             custom_today_enabled=self.custom_today_var.get(),
             custom_today=self.today_entry_var.get().strip(),
             graph_days=self.graph_days_var.get(),
+            graph_show_additions=self.graph_show_additions_var.get(),
+            graph_show_deletions=self.graph_show_deletions_var.get(),
+            graph_show_commits=self.graph_show_commits_var.get(),
+            graph_curve=float(self.graph_curve_var.get()),
             auto_refresh=self.auto_refresh_var.get(),
             author=self.author_raw,
             author_display=self.author_display,
-            memo_text=memo_text,
             compact_variant=self.compact_variant,
             compact_alpha=self.compact_alpha,
+            note_tab=self.active_note_tab,
+            schedule_path=self.schedule_path,
             repo_path=str(self.repo) if self.repo_selected else "",
             lang=self.lang,
             theme=self.theme_name,
             geometry=self.get_persisted_geometry(),
         )
-        try:
-            self.settings_path.parent.mkdir(parents=True, exist_ok=True)
-            self.settings_path.write_text(
-                json.dumps(self.settings.to_dict(), ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-        except OSError:
-            # UI 동작은 계속 유지하고, 저장 실패만 무시한다.
-            pass
+        save_ui_settings(self.settings_path, self.settings)
 
     def parse_today_entry(self) -> dt.date:
         value = self.today_entry_var.get().strip()
@@ -3377,8 +3618,10 @@ class LineTrackerApp:
 
     def apply_date_controls_state(self) -> None:
         state = "normal" if self.custom_today_var.get() else "disabled"
-        self.today_entry.configure(state=state)
-        self.today_apply_button.configure(state=state)
+        if hasattr(self, "today_entry"):
+            self.today_entry.configure(state=state)
+        if hasattr(self, "today_apply_button"):
+            self.today_apply_button.configure(state=state)
 
     def update_repo_dependent_controls(self) -> None:
         repo_state = "normal" if self.repo_selected else "disabled"
@@ -3386,7 +3629,8 @@ class LineTrackerApp:
             self.auto_refresh_var.set(False)
         if not self.repo_selected:
             self.cancel_auto_refresh()
-        self.auto_refresh_check.configure(state=repo_state)
+        if hasattr(self, "auto_refresh_check"):
+            self.auto_refresh_check.configure(state=repo_state)
         refresh_state = "normal" if self.repo_selected and not self.refresh_in_progress else "disabled"
         self.refresh_button.configure(state=refresh_state)
         self.compact_refresh_button.configure(state=refresh_state)
@@ -3418,13 +3662,451 @@ class LineTrackerApp:
             outline=border,
             width=1,
         )
-        self.compact_button.create_text(
-            size // 2,
-            size // 2,
-            text=self.t("compact_toggle_short"),
-            fill=palette.button_text,
-            font=("Bahnschrift", 9, "bold"),
+        icon = palette.button_text
+        self.compact_button.create_rectangle(
+            8,
+            8,
+            size - 7,
+            size - 7,
+            outline=icon,
+            width=1,
         )
+        self.compact_button.create_rectangle(
+            size - 14,
+            size - 14,
+            size - 9,
+            size - 9,
+            fill=icon,
+            outline=icon,
+        )
+
+    def redraw_graph_settings_button(self) -> None:
+        if not hasattr(self, "graph_settings_button"):
+            return
+        palette = self.theme
+        size = GRAPH_SETTINGS_BUTTON_SIZE
+        inset = 2
+        state = getattr(self, "graph_settings_button_state", "normal")
+
+        fill = blend_hex(palette.card_bg, palette.accent_light, 0.08)
+        border = blend_hex(palette.border, palette.accent_light, 0.18)
+        icon = palette.accent_light
+        if state == "hover":
+            fill = blend_hex(palette.card_bg, palette.accent_light, 0.18)
+            border = blend_hex(palette.border, palette.accent_light, 0.42)
+            icon = palette.text
+        elif state == "pressed":
+            fill = blend_hex(palette.card_bg, palette.accent, 0.26)
+            border = blend_hex(palette.border, palette.accent, 0.55)
+            icon = palette.text
+
+        canvas = self.graph_settings_button
+        canvas.configure(bg=palette.app_bg, width=size, height=size)
+        canvas.delete("all")
+        canvas.create_rectangle(
+            inset,
+            inset,
+            size - inset,
+            size - inset,
+            fill=fill,
+            outline=border,
+            width=1,
+        )
+
+        left = 8
+        right = size - 8
+        rows = ((9, 18), (14, 11), (19, 20))
+        knob_radius = 2
+        for y, knob_x in rows:
+            canvas.create_line(left, y, right, y, fill=icon, width=2)
+            canvas.create_oval(
+                knob_x - knob_radius,
+                y - knob_radius,
+                knob_x + knob_radius,
+                y + knob_radius,
+                fill=icon,
+                outline="",
+            )
+
+    def redraw_app_settings_button(self) -> None:
+        if not hasattr(self, "app_settings_button"):
+            return
+        palette = self.theme
+        size = APP_SETTINGS_BUTTON_SIZE
+        inset = 2
+        state = getattr(self, "app_settings_button_state", "normal")
+
+        fill = blend_hex(palette.card_bg, palette.accent_light, 0.08)
+        border = blend_hex(palette.border, palette.accent_light, 0.2)
+        icon = palette.accent_light
+        if state == "hover":
+            fill = blend_hex(palette.card_bg, palette.accent_light, 0.18)
+            border = blend_hex(palette.border, palette.accent_light, 0.45)
+            icon = palette.text
+        elif state == "pressed":
+            fill = blend_hex(palette.card_bg, palette.accent, 0.28)
+            border = blend_hex(palette.border, palette.accent, 0.58)
+            icon = palette.text
+
+        canvas = self.app_settings_button
+        canvas.configure(bg=palette.app_bg, width=size, height=size)
+        canvas.delete("all")
+        canvas.create_rectangle(
+            inset,
+            inset,
+            size - inset,
+            size - inset,
+            fill=fill,
+            outline=border,
+            width=1,
+        )
+
+        cx = cy = size / 2
+        for idx in range(8):
+            angle = math.tau * idx / 8
+            inner = 8.5
+            outer = 11.5
+            canvas.create_line(
+                cx + math.cos(angle) * inner,
+                cy + math.sin(angle) * inner,
+                cx + math.cos(angle) * outer,
+                cy + math.sin(angle) * outer,
+                fill=icon,
+                width=2,
+            )
+        canvas.create_oval(cx - 8, cy - 8, cx + 8, cy + 8, outline=icon, width=2)
+        canvas.create_oval(cx - 2.5, cy - 2.5, cx + 2.5, cy + 2.5, fill=icon, outline="")
+
+    def set_app_settings_button_state(self, state: str) -> None:
+        self.app_settings_button_state = state
+        self.redraw_app_settings_button()
+
+    def on_app_settings_button_release(self, event: tk.Event) -> str:
+        if not hasattr(self, "app_settings_button"):
+            return "break"
+        inside = 0 <= event.x <= APP_SETTINGS_BUTTON_SIZE and 0 <= event.y <= APP_SETTINGS_BUTTON_SIZE
+        self.set_app_settings_button_state("hover" if inside else "normal")
+        if inside:
+            self.open_app_settings_window()
+        return "break"
+
+    def on_app_settings_button_keypress(self, _: tk.Event) -> str:
+        self.open_app_settings_window()
+        return "break"
+
+    def set_graph_settings_button_state(self, state: str) -> None:
+        self.graph_settings_button_state = state
+        self.redraw_graph_settings_button()
+
+    def on_graph_settings_button_release(self, event: tk.Event) -> str:
+        if not hasattr(self, "graph_settings_button"):
+            return "break"
+        inside = 0 <= event.x <= GRAPH_SETTINGS_BUTTON_SIZE and 0 <= event.y <= GRAPH_SETTINGS_BUTTON_SIZE
+        self.set_graph_settings_button_state("hover" if inside else "normal")
+        if inside:
+            self.open_graph_settings_window()
+        return "break"
+
+    def on_graph_settings_button_keypress(self, _: tk.Event) -> str:
+        self.open_graph_settings_window()
+        return "break"
+
+    def open_app_settings_window(self) -> None:
+        existing_window = self.app_settings_window
+        if existing_window is not None:
+            try:
+                if existing_window.winfo_exists():
+                    self.refresh_app_settings_window()
+                    existing_window.lift()
+                    existing_window.focus_set()
+                    return
+            except tk.TclError:
+                self.close_app_settings_window()
+
+        window = ttk.Frame(self.root, style="Card.TFrame", padding=(16, 14), takefocus=True)
+        window.place(relx=0.5, rely=0.5, anchor="center", width=480)
+        window.columnconfigure(0, weight=1)
+        window.bind("<Escape>", lambda _: self.close_app_settings_window())
+        self.app_settings_window = window
+        self.app_settings_card = window
+
+        title_row = ttk.Frame(window, style="CardInner.TFrame")
+        title_row.grid(row=0, column=0, sticky="ew")
+        title_row.columnconfigure(0, weight=1)
+
+        self.app_settings_title_label = ttk.Label(title_row, text=self.t("settings"), style="SettingsTitle.TLabel")
+        self.app_settings_title_label.grid(row=0, column=0, sticky="w")
+
+        self.app_settings_close_button = ttk.Button(
+            title_row,
+            text="X",
+            command=self.close_app_settings_window,
+            style="CompactTool.TButton",
+            width=3,
+        )
+        self.app_settings_close_button.grid(row=0, column=1, sticky="e")
+
+        notebook = ttk.Notebook(window, style="Settings.TNotebook")
+        notebook.grid(row=1, column=0, sticky="nsew", pady=(12, 0))
+        self.app_settings_notebook = notebook
+
+        general_tab = ttk.Frame(notebook, style="CardInner.TFrame", padding=(12, 12))
+        repo_tab = ttk.Frame(notebook, style="CardInner.TFrame", padding=(12, 12))
+        tracking_tab = ttk.Frame(notebook, style="CardInner.TFrame", padding=(12, 12))
+        schedule_tab = ttk.Frame(notebook, style="CardInner.TFrame", padding=(12, 12))
+        for tab in (general_tab, repo_tab, tracking_tab, schedule_tab):
+            tab.columnconfigure(0, weight=1)
+        notebook.add(general_tab, text=self.t("settings_general_tab"))
+        notebook.add(repo_tab, text=self.t("settings_repo_tab"))
+        notebook.add(tracking_tab, text=self.t("settings_tracking_tab"))
+        notebook.add(schedule_tab, text=self.t("settings_schedule_tab"))
+
+        self._build_general_settings_tab(general_tab)
+        self._build_repo_settings_tab(repo_tab)
+        self._build_tracking_settings_tab(tracking_tab)
+        self._build_schedule_settings_tab(schedule_tab)
+
+        self.refresh_app_settings_window()
+        window.update_idletasks()
+        window.lift()
+        window.focus_set()
+
+    def _build_general_settings_tab(self, parent: ttk.Frame) -> None:
+        m = self.layout_metrics
+        self.lang_label = ttk.Label(parent, text=self.t("lang_label"), style="SettingsLabel.TLabel")
+        self.lang_label.grid(row=0, column=0, sticky="w")
+        self.lang_combo = ttk.Combobox(
+            parent,
+            textvariable=self.lang_var,
+            values=list(LANG_OPTIONS.keys()),
+            width=18,
+            state="readonly",
+            style="Tracker.TCombobox",
+        )
+        self.lang_combo.grid(row=1, column=0, sticky="ew", pady=(m.control_small_gap, m.control_large_gap))
+        self.lang_combo.bind("<<ComboboxSelected>>", self.on_language_select)
+        self._bind_combobox_text_selection_clear(self.lang_combo)
+
+        self.theme_label = ttk.Label(parent, text=self.t("theme_label"), style="SettingsLabel.TLabel")
+        self.theme_label.grid(row=2, column=0, sticky="w")
+        self.theme_combo = ttk.Combobox(
+            parent,
+            textvariable=self.theme_var,
+            values=self.theme_display_values(),
+            width=18,
+            state="readonly",
+            style="Tracker.TCombobox",
+        )
+        self.theme_combo.grid(row=3, column=0, sticky="ew", pady=(m.control_small_gap, 0))
+        self.theme_combo.bind("<<ComboboxSelected>>", self.on_theme_select)
+        self._bind_combobox_text_selection_clear(self.theme_combo)
+
+    def _build_repo_settings_tab(self, parent: ttk.Frame) -> None:
+        m = self.layout_metrics
+        parent.columnconfigure(0, minsize=300, weight=1)
+        self.repo_header_label = ttk.Label(parent, text=self.t("repo_label"), style="SettingsLabel.TLabel")
+        self.repo_header_label.grid(row=0, column=0, sticky="w")
+        self.repo_entry = ttk.Entry(parent, textvariable=self.repo_entry_var, width=48, style="Tracker.TEntry")
+        self.repo_entry.grid(row=1, column=0, sticky="ew", pady=(m.control_small_gap, 0))
+        self.repo_entry.bind("<Return>", self.on_repo_entry_enter)
+        self.repo_apply_button = ttk.Button(parent, text=self.t("repo_select"), command=self.browse_repo)
+        self.repo_apply_button.grid(row=1, column=1, sticky="e", padx=(m.control_large_gap, 0), pady=(m.control_small_gap, 0))
+
+    def _build_tracking_settings_tab(self, parent: ttk.Frame) -> None:
+        m = self.layout_metrics
+        parent.columnconfigure(0, minsize=260, weight=1)
+
+        self.custom_today_check = ttk.Checkbutton(
+            parent,
+            text=self.t("custom_date"),
+            variable=self.custom_today_var,
+            command=self.on_custom_date_toggle,
+        )
+        self.custom_today_check.grid(row=0, column=0, columnspan=2, sticky="w")
+
+        self.today_entry = ttk.Entry(parent, textvariable=self.today_entry_var, width=14, style="Tracker.TEntry")
+        self.today_entry.grid(row=1, column=0, sticky="ew", pady=(m.control_small_gap, 0))
+        self.today_entry.bind("<Return>", self.on_today_entry_enter)
+        self.today_apply_button = ttk.Button(parent, text=self.t("apply_date"), command=self.apply_custom_date)
+        self.today_apply_button.grid(row=1, column=1, sticky="e", padx=(m.control_large_gap, 0), pady=(m.control_small_gap, 0))
+
+        self.goal_label = ttk.Label(parent, text=self.t("goal_label"), style="SettingsLabel.TLabel")
+        self.goal_label.grid(row=2, column=0, sticky="w", pady=(m.control_large_gap, 0))
+        self.goal_entry = ttk.Entry(parent, textvariable=self.goal_entry_var, width=14, style="Tracker.TEntry")
+        self.goal_entry.grid(row=3, column=0, sticky="ew", pady=(m.control_small_gap, 0))
+        self.goal_entry.bind("<Return>", self.on_goal_entry_enter)
+        self.goal_apply_button = ttk.Button(parent, text=self.t("apply_goal"), command=self.apply_goal)
+        self.goal_apply_button.grid(row=3, column=1, sticky="e", padx=(m.control_large_gap, 0), pady=(m.control_small_gap, 0))
+
+        self.author_label = ttk.Label(parent, text=self.t("author_label"), style="SettingsLabel.TLabel")
+        self.author_label.grid(row=4, column=0, sticky="w", pady=(m.control_large_gap, 0))
+        self.author_combo = ttk.Combobox(
+            parent,
+            textvariable=self.author_entry_var,
+            values=self.author_options,
+            width=28,
+            style="Tracker.TCombobox",
+        )
+        self.author_combo.grid(row=5, column=0, sticky="ew", pady=(m.control_small_gap, 0))
+        self.author_combo.bind("<Return>", self.on_author_entry_enter)
+        self.author_combo.bind("<<ComboboxSelected>>", self.on_author_select)
+        self._bind_combobox_text_selection_clear(self.author_combo)
+        self.author_apply_button = ttk.Button(parent, text=self.t("apply_author"), command=self.apply_author)
+        self.author_apply_button.grid(row=5, column=1, sticky="e", padx=(m.control_large_gap, 0), pady=(m.control_small_gap, 0))
+
+        self.auto_refresh_check = ttk.Checkbutton(
+            parent,
+            text=self.t("auto_refresh"),
+            variable=self.auto_refresh_var,
+            command=self.on_auto_refresh_toggle,
+        )
+        self.auto_refresh_check.grid(row=6, column=0, columnspan=2, sticky="w", pady=(m.control_large_gap, 0))
+        self.apply_date_controls_state()
+        self.update_repo_dependent_controls()
+
+    def _build_schedule_settings_tab(self, parent: ttk.Frame) -> None:
+        m = self.layout_metrics
+        parent.columnconfigure(0, minsize=300, weight=1)
+
+        self.schedule_path_label = ttk.Label(
+            parent,
+            text=self.t("schedule_path_label"),
+            style="SettingsLabel.TLabel",
+        )
+        self.schedule_path_label.grid(row=0, column=0, columnspan=2, sticky="w")
+
+        self.schedule_path_entry = ttk.Entry(
+            parent,
+            textvariable=self.schedule_path_var,
+            style="Tracker.TEntry",
+        )
+        self.schedule_path_entry.grid(
+            row=1,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            pady=(m.control_small_gap, 0),
+        )
+        self.schedule_path_entry.bind("<Return>", lambda _: self.apply_schedule_path())
+
+        self.schedule_path_hint = ttk.Label(
+            parent,
+            text=self.t("schedule_path_hint"),
+            style="CardLabel.TLabel",
+            wraplength=390,
+            justify="left",
+        )
+        self.schedule_path_hint.grid(row=2, column=0, columnspan=2, sticky="w", pady=(m.control_large_gap, 0))
+
+        actions = ttk.Frame(parent, style="CardInner.TFrame")
+        actions.grid(row=3, column=0, columnspan=2, sticky="e", pady=(m.control_large_gap, 0))
+        self.schedule_settings_browse_button = ttk.Button(
+            actions,
+            text=self.t("schedule_select"),
+            command=self.browse_schedule_file,
+        )
+        self.schedule_settings_browse_button.grid(row=0, column=0, sticky="e")
+        self.schedule_path_apply_button = ttk.Button(
+            actions,
+            text=self.t("schedule_path_apply"),
+            command=self.apply_schedule_path,
+        )
+        self.schedule_path_apply_button.grid(row=0, column=1, sticky="e", padx=(m.control_large_gap, 0))
+
+    def close_app_settings_window(self) -> None:
+        window = self.app_settings_window
+        self.app_settings_window = None
+        self.app_settings_card = None
+        self.app_settings_notebook = None
+        for attr_name in (
+            "app_settings_title_label",
+            "app_settings_close_button",
+            "lang_label",
+            "lang_combo",
+            "theme_label",
+            "theme_combo",
+            "repo_header_label",
+            "repo_entry",
+            "repo_apply_button",
+            "custom_today_check",
+            "today_entry",
+            "today_apply_button",
+            "goal_label",
+            "goal_entry",
+            "goal_apply_button",
+            "author_label",
+            "author_combo",
+            "author_apply_button",
+            "auto_refresh_check",
+            "schedule_path_label",
+            "schedule_path_entry",
+            "schedule_path_hint",
+            "schedule_settings_browse_button",
+            "schedule_path_apply_button",
+        ):
+            if hasattr(self, attr_name):
+                delattr(self, attr_name)
+        if window is not None:
+            try:
+                window.destroy()
+            except tk.TclError:
+                pass
+
+    def refresh_app_settings_window(self) -> None:
+        window = self.app_settings_window
+        if window is None:
+            return
+        try:
+            if not window.winfo_exists():
+                self.close_app_settings_window()
+                return
+        except tk.TclError:
+            self.close_app_settings_window()
+            return
+
+        window.configure(style="Card.TFrame")
+        if hasattr(self, "app_settings_title_label"):
+            self.app_settings_title_label.configure(text=self.t("settings"))
+        if self.app_settings_notebook is not None:
+            self.app_settings_notebook.tab(0, text=self.t("settings_general_tab"))
+            self.app_settings_notebook.tab(1, text=self.t("settings_repo_tab"))
+            self.app_settings_notebook.tab(2, text=self.t("settings_tracking_tab"))
+            self.app_settings_notebook.tab(3, text=self.t("settings_schedule_tab"))
+        if hasattr(self, "lang_label"):
+            self.lang_label.configure(text=self.t("lang_label"))
+        if hasattr(self, "theme_label"):
+            self.theme_label.configure(text=self.t("theme_label"))
+        if hasattr(self, "repo_header_label"):
+            self.repo_header_label.configure(text=self.t("repo_label"))
+        if hasattr(self, "repo_apply_button"):
+            self.repo_apply_button.configure(text=self.t("repo_select"))
+        if hasattr(self, "custom_today_check"):
+            self.custom_today_check.configure(text=self.t("custom_date"))
+        if hasattr(self, "today_apply_button"):
+            self.today_apply_button.configure(text=self.t("apply_date"))
+        if hasattr(self, "goal_label"):
+            self.goal_label.configure(text=self.t("goal_label"))
+        if hasattr(self, "goal_apply_button"):
+            self.goal_apply_button.configure(text=self.t("apply_goal"))
+        if hasattr(self, "author_label"):
+            self.author_label.configure(text=self.t("author_label"))
+        if hasattr(self, "author_apply_button"):
+            self.author_apply_button.configure(text=self.t("apply_author"))
+        if hasattr(self, "auto_refresh_check"):
+            self.auto_refresh_check.configure(text=self.t("auto_refresh"))
+        if hasattr(self, "schedule_path_label"):
+            self.schedule_path_label.configure(text=self.t("schedule_path_label"))
+        if hasattr(self, "schedule_path_hint"):
+            self.schedule_path_hint.configure(text=self.t("schedule_path_hint"))
+        if hasattr(self, "schedule_settings_browse_button"):
+            self.schedule_settings_browse_button.configure(text=self.t("schedule_select"))
+        if hasattr(self, "schedule_path_apply_button"):
+            self.schedule_path_apply_button.configure(text=self.t("schedule_path_apply"))
+        if hasattr(self, "lang_combo"):
+            self.lang_combo.configure(values=list(LANG_OPTIONS.keys()))
+        self.refresh_theme_selector()
+        self.apply_date_controls_state()
+        self.update_repo_dependent_controls()
 
     def set_compact_launch_button_state(self, state: str) -> None:
         self.compact_button_visual_state = state
@@ -3463,6 +4145,7 @@ class LineTrackerApp:
         self.update_repo_dependent_controls()
 
     def refresh(self) -> None:
+        self.refresh_schedule()
         if not self.repo_selected:
             self.cancel_auto_refresh()
             self.refresh_ref_label()
@@ -3476,36 +4159,33 @@ class LineTrackerApp:
             return
 
         self.refresh_in_progress = True
-        self.refresh_request_id += 1
-        request_id = self.refresh_request_id
         self.refresh_ref_label()
         config = self.build_config()
         graph_days = int(self.graph_days_var.get())
         self.set_loading_state(True)
-
-        worker = threading.Thread(
-            target=self._refresh_worker,
-            args=(request_id, config, graph_days),
-            daemon=True,
+        request_id = self.refresh_coordinator.start(
+            repo=self.repo,
+            author=self.author,
+            config=config,
+            graph_days=graph_days,
+            on_success=self._on_refresh_success,
+            on_failure=self._on_refresh_error,
         )
-        worker.start()
-
-    def _refresh_worker(self, request_id: int, config: TrackerConfig, graph_days: int) -> None:
-        try:
-            snapshot = build_refresh_snapshot(self.repo, self.author, config, graph_days)
-            self.safe_after(lambda s=snapshot: self._on_refresh_success(request_id, s))
-        except Exception as exc:  # pragma: no cover
-            self.safe_after(lambda e=str(exc): self._on_refresh_error(request_id, e))
+        if request_id is None:
+            self.refresh_in_progress = False
+            self.set_loading_state(False)
+            return
+        self.refresh_request_id = request_id
 
     def safe_after(self, callback) -> None:
         try:
             self.root.after(0, callback)
-        except tk.TclError:
+        except (RuntimeError, tk.TclError):
             pass
 
     def install_background_focus_clear_bindings(self) -> None:
         roots: list[tk.Misc] = [self.root]
-        for attr_name in ("container", "compact_container"):
+        for attr_name in ("stats_scroll_host", "stats_canvas", "stats_container", "container", "compact_container"):
             widget = getattr(self, attr_name, None)
             if widget is not None:
                 roots.append(widget)
@@ -3528,6 +4208,83 @@ class LineTrackerApp:
         except tk.TclError:
             return
 
+    def _bind_stats_scroll(self) -> None:
+        self.root.bind_all("<MouseWheel>", self.on_main_content_mousewheel, add="+")
+        self.root.bind_all("<Button-4>", self.on_main_content_mousewheel, add="+")
+        self.root.bind_all("<Button-5>", self.on_main_content_mousewheel, add="+")
+
+    def on_stats_container_configure(self, _: tk.Event) -> None:
+        self.update_stats_scroll_region()
+
+    def on_stats_canvas_configure(self, event: tk.Event) -> None:
+        if hasattr(self, "stats_canvas_window"):
+            self.stats_canvas.itemconfigure(self.stats_canvas_window, width=event.width)
+        self.update_stats_scroll_region()
+
+    def update_stats_scroll_region(self) -> None:
+        if not hasattr(self, "stats_canvas"):
+            return
+        try:
+            bbox = self.stats_canvas.bbox("all")
+            if bbox is not None:
+                self.stats_canvas.configure(scrollregion=bbox)
+        except tk.TclError:
+            return
+
+    def on_main_content_mousewheel(self, event: tk.Event) -> str | None:
+        if self.compact_mode or not hasattr(self, "stats_canvas"):
+            return None
+
+        widget = event.widget
+        try:
+            if widget.winfo_toplevel() is not self.root:
+                return None
+        except tk.TclError:
+            return None
+
+        stats_root = getattr(self, "stats_scroll_host", None)
+        if stats_root is None or not self._is_descendant_widget(widget, stats_root):
+            return None
+
+        widget_class = widget.winfo_class()
+        if widget_class in {"Text", "TCombobox", "Combobox", "Entry", "TEntry", "Scale", "Listbox"}:
+            return None
+
+        try:
+            bbox = self.stats_canvas.bbox("all")
+            viewport_height = int(self.stats_canvas.winfo_height())
+        except tk.TclError:
+            return None
+        if not bbox or (bbox[3] - bbox[1]) <= viewport_height:
+            return None
+
+        delta = 0
+        event_num = getattr(event, "num", None)
+        if event_num == 4:
+            delta = -1
+        elif event_num == 5:
+            delta = 1
+        else:
+            raw_delta = int(getattr(event, "delta", 0))
+            if raw_delta == 0:
+                return None
+            delta = -max(1, abs(raw_delta) // 120) if raw_delta > 0 else max(1, abs(raw_delta) // 120)
+
+        try:
+            self.stats_canvas.yview_scroll(delta, "units")
+        except tk.TclError:
+            return None
+        return "break"
+
+    @staticmethod
+    def _is_descendant_widget(widget: tk.Misc, ancestor: tk.Misc) -> bool:
+        current: tk.Misc | None = widget
+        while current is not None:
+            if current is ancestor:
+                return True
+            current = getattr(current, "master", None)
+        return False
+
     def _on_refresh_success(self, request_id: int, snapshot: RefreshSnapshot) -> None:
         if request_id != self.refresh_request_id:
             return
@@ -3547,14 +4304,32 @@ class LineTrackerApp:
             result,
             branch_total,
             snapshot.branch_deletions,
+            snapshot.branch_active_days,
+            snapshot.overall_active_days,
             snapshot.overall_deletions,
             snapshot.uncommitted_deletions,
+            snapshot.daily_commit_count,
+            snapshot.branch_commit_count,
+            snapshot.overall_commit_count,
+            snapshot.project_total_lines,
             snapshot.share_text,
         )
-        self.update_progress(result, snapshot.today_done, snapshot.today_target)
-        self.update_graph(snapshot.points, result.today, snapshot.graph_days, snapshot.graph_avg, snapshot.graph_max)
+        self.update_progress(
+            result,
+            snapshot.today_done,
+            snapshot.today_target,
+            snapshot.overall_progress_language_lines,
+            snapshot.daily_progress_language_lines,
+        )
+        self.update_graph(
+            snapshot.graph_added_points,
+            snapshot.graph_deleted_points,
+            snapshot.graph_commit_points,
+            result.today,
+        )
         uncommitted_today = result.uncommitted_insertions if result.today == dt.date.today() else 0
         self.update_grass(snapshot.grass_points, result.today, uncommitted_today)
+        self.reset_commit_history_loader(result.today)
 
         status_suffix = self.t("status_auto_suffix") if self.auto_refresh_var.get() else ""
         update_time = dt.datetime.now().strftime("%H:%M:%S")
@@ -3571,7 +4346,8 @@ class LineTrackerApp:
         self.set_loading_state(False)
         self.status_var.set(self.t("status_error"))
         self.set_compact_status(self.t("status_error"))
-        self.show_error(error_message)
+        if not self.capture_mode:
+            self.show_error(error_message)
 
     def copy_output(self) -> None:
         if not self.current_output:
@@ -3583,65 +4359,97 @@ class LineTrackerApp:
         self.root.clipboard_append(text)
         self.status_var.set(self.t(status_key))
 
-    def update_progress(self, result: TrackerResult, today_done: int, today_target: int) -> None:
-        current_total = self.main_total_committed + self.branch_total_committed + result.uncommitted_insertions
-        if self.goal <= 0:
-            overall_percent = 0.0
-        else:
-            overall_percent = (current_total / self.goal) * 100.0
-        overall_percent = max(0.0, min(100.0, overall_percent))
-        self.overall_progress_var.set(overall_percent)
-        breakdown = self.t(
-            "progress_breakdown",
-            main=f"{self.main_total_committed:,}",
-            branch=f"{self.branch_total_committed:,}",
-            uncommitted=f"{result.uncommitted_insertions:,}",
+    def update_progress(
+        self,
+        result: TrackerResult,
+        today_done: int,
+        today_target: int,
+        overall_language_lines: dict[str, int],
+        daily_language_lines: dict[str, int],
+    ) -> None:
+        presentation = build_progress_presentation(
+            main_committed=self.main_total_committed,
+            branch_committed=self.branch_total_committed,
+            uncommitted=result.uncommitted_insertions,
+            goal=self.goal,
+            today_done=today_done,
+            today_target=today_target,
+            translate=self.t,
         )
-        self.overall_progress_text_var.set(
-            self.t(
-                "overall_progress_text",
-                current=f"{current_total:,}",
-                goal=f"{self.goal:,}",
-                percent=f"{overall_percent:.1f}",
-                breakdown=breakdown,
-            )
-        )
+        self.overall_progress_text_var.set(presentation.breakdown_text)
+        self.progress_bar_percents["overall"] = presentation.overall_percent
+        self.progress_bar_percents["daily"] = presentation.daily_percent
+        self.progress_bar_texts["overall"] = presentation.overall_bar_text
+        self.progress_bar_texts["daily"] = presentation.daily_bar_text
+        self.set_progress_language_lines(overall_language_lines, daily_language_lines)
+        self.redraw_progress_bars()
 
-        if today_target <= 0:
-            daily_percent = 100.0
-        else:
-            daily_percent = (today_done / today_target) * 100.0
-        daily_percent = max(0.0, min(100.0, daily_percent))
+    @staticmethod
+    def format_progress_percent(percent: float, *, complete: bool) -> str:
+        return format_progress_percent_value(percent, complete=complete)
 
-        self.daily_progress_var.set(daily_percent)
-        self.daily_progress_text_var.set(
-            self.t(
-                "daily_progress_text",
-                done=f"{today_done:,}",
-                target=f"{today_target:,}",
-                percent=f"{daily_percent:.1f}",
+    def graph_series_definitions(self) -> list[tuple[str, str, str, list[tuple[dt.date, int]], bool]]:
+        return [
+            (
+                "additions",
+                self.t("graph_series_additions"),
+                self.theme.accent,
+                self.graph_added_points,
+                self.graph_show_additions_var.get(),
+            ),
+            (
+                "deletions",
+                self.t("graph_series_deletions"),
+                self.theme.danger,
+                self.graph_deleted_points,
+                self.graph_show_deletions_var.get(),
+            ),
+            (
+                "commits",
+                self.t("graph_series_commits"),
+                self.theme.accent_alt,
+                self.graph_commit_points,
+                self.graph_show_commits_var.get(),
+            ),
+        ]
+
+    @staticmethod
+    def summarize_graph_values(points: list[tuple[dt.date, int]]) -> tuple[float, int]:
+        return summarize_graph_point_values(points)
+
+    def refresh_graph_summary(self) -> None:
+        summary_items: list[str] = []
+        for _, label, _, points, enabled in self.graph_series_definitions():
+            if not enabled:
+                continue
+            avg_value, max_value = self.summarize_graph_values(points)
+            summary_items.append(
+                self.t(
+                    "graph_summary_item",
+                    label=label,
+                    avg=f"{avg_value:.1f}",
+                    max=f"{max_value:,}",
+                )
             )
-        )
+        self.graph_summary_var.set(" | ".join(summary_items) if summary_items else self.t("graph_summary_empty"))
+
+    def redraw_graph(self) -> None:
+        self.refresh_graph_summary()
+        self.draw_daily_graph(self.graph_highlight_day)
 
     def update_graph(
         self,
-        points: list[tuple[dt.date, int]],
+        added_points: list[tuple[dt.date, int]],
+        deleted_points: list[tuple[dt.date, int]],
+        commit_points: list[tuple[dt.date, int]],
         highlight_day: dt.date,
-        days: int,
-        avg_value: float,
-        max_value: int,
     ) -> None:
-        self.graph_points = list(points)
+        self.graph_points = list(added_points)
+        self.graph_added_points = list(added_points)
+        self.graph_deleted_points = list(deleted_points)
+        self.graph_commit_points = list(commit_points)
         self.graph_highlight_day = highlight_day
-        self.draw_daily_graph(points, highlight_day)
-        self.graph_summary_var.set(
-            self.t(
-                "graph_summary",
-                days=days,
-                avg=f"{avg_value:.1f}",
-                max=f"{max_value:,}",
-            )
-        )
+        self.redraw_graph()
 
     def update_grass(
         self,
@@ -3652,7 +4460,437 @@ class LineTrackerApp:
         if self.grass_panel_controller is not None:
             self.grass_panel_controller.update(points, highlight_day, uncommitted_today)
 
-    def draw_daily_graph(self, points: list[tuple[dt.date, int]], highlight_day: dt.date) -> None:
+    def update_commit_history(self, entries: list[CommitChangeEntry]) -> None:
+        container = getattr(self, "commit_history_container", None)
+        if container is None:
+            return
+        empty_label = getattr(self, "commit_history_empty_label", None)
+        if empty_label is not None:
+            empty_label.destroy()
+            self.commit_history_empty_label = None
+        for child in container.winfo_children():
+            child.destroy()
+
+        if not entries:
+            empty_label = ttk.Label(
+                self.commit_history_scroll_host,
+                text=self.t("commit_history_empty"),
+                style="CardLabel.TLabel",
+            )
+            empty_label.place(relx=0.5, rely=0.5, anchor="center")
+            self.commit_history_empty_label = empty_label
+            self.commit_history_scroll_panel.update_scroll_region()
+            return
+
+        for row_index, entry in enumerate(entries):
+            row = ttk.Frame(container, style="CardInner.TFrame", padding=(0, 6))
+            row.grid(row=row_index, column=0, sticky="ew", pady=(0, 2))
+            row.columnconfigure(1, weight=1)
+
+            date_text = entry.date.isoformat()[5:] if entry.date is not None else "--"
+            meta_label = ttk.Label(row, text=f"{date_text} {entry.short_hash}", style="CardLabel.TLabel")
+            meta_label.grid(row=0, column=0, sticky="w", padx=(0, 8))
+
+            subject = entry.subject if entry.subject else entry.short_hash
+            subject_label = ttk.Label(row, text=subject, style="CardTitle.TLabel", wraplength=170)
+            subject_label.grid(row=0, column=1, sticky="ew", padx=(0, 8))
+
+            add_label = ttk.Label(row, text=f"+{entry.insertions:,}", style="CardDeltaAdd.TLabel")
+            add_label.grid(row=0, column=2, sticky="e", padx=(0, 6))
+
+            delete_label = ttk.Label(row, text=f"-{entry.deletions:,}", style="CardDeltaRemove.TLabel")
+            delete_label.grid(row=0, column=3, sticky="e")
+
+        self.commit_history_scroll_panel.bind_content_tree()
+        self.commit_history_scroll_panel.update_scroll_region()
+
+    def reset_commit_history_loader(self, today: dt.date) -> None:
+        try:
+            tracked_ref = resolve_ref(self.repo, self.ref)
+            current_ref = resolve_current_ref(self.repo)
+            base_ref = resolve_base_commit(self.repo, today, self.base_commit, tracked_ref)
+        except (OSError, RuntimeError):
+            self.commit_history_ref = "HEAD"
+            self.commit_history_exclude_ref = ""
+            self.update_commit_history([])
+            return
+
+        self.commit_history_ref = current_ref or tracked_ref
+        self.commit_history_exclude_ref = base_ref
+        self.commit_history_entries = []
+        self.commit_history_loading = False
+        self.commit_history_exhausted = False
+        self.commit_history_generation += 1
+        self.update_commit_history([])
+        self.load_next_commit_history_page()
+
+    def on_commit_history_scroll(self, _first: float, last: float) -> None:
+        if last >= 0.82:
+            self.load_next_commit_history_page()
+
+    def load_next_commit_history_page(self) -> None:
+        if self.commit_history_loading or self.commit_history_exhausted or not self.repo_selected:
+            return
+        generation = self.commit_history_generation
+        skip = len(self.commit_history_entries)
+        self.commit_history_loading = True
+        worker = threading.Thread(
+            target=self._commit_history_worker,
+            args=(generation, skip, COMMIT_HISTORY_PAGE_SIZE, self.commit_history_ref, self.commit_history_exclude_ref),
+            daemon=True,
+        )
+        worker.start()
+
+    def _commit_history_worker(
+        self,
+        generation: int,
+        skip: int,
+        limit: int,
+        ref: str,
+        exclude_ref: str,
+    ) -> None:
+        try:
+            entries = get_commit_change_entries(
+                self.repo,
+                self.author,
+                ref,
+                exclude_ref=exclude_ref or None,
+                limit=limit,
+                skip=skip,
+            )
+        except (OSError, RuntimeError):
+            entries = []
+        self.safe_after(lambda e=entries, g=generation: self._on_commit_history_page(g, e))
+
+    def _on_commit_history_page(self, generation: int, entries: list[CommitChangeEntry]) -> None:
+        if generation != self.commit_history_generation:
+            return
+        self.commit_history_loading = False
+        if len(entries) < COMMIT_HISTORY_PAGE_SIZE:
+            self.commit_history_exhausted = True
+        if entries:
+            seen = {entry.commit_hash for entry in self.commit_history_entries}
+            self.commit_history_entries.extend(entry for entry in entries if entry.commit_hash not in seen)
+        self.update_commit_history(self.commit_history_entries)
+
+    def open_graph_settings_window(self) -> None:
+        existing_window = self.graph_settings_window
+        if existing_window is not None:
+            try:
+                if existing_window.winfo_exists():
+                    self.refresh_graph_settings_window()
+                    existing_window.deiconify()
+                    existing_window.lift()
+                    existing_window.focus_force()
+                    return
+            except tk.TclError:
+                pass
+
+        window = tk.Toplevel(self.root)
+        window.resizable(False, False)
+        window.transient(self.root)
+        window.configure(bg=self.theme.border, padx=1, pady=1)
+        if sys.platform == "win32":
+            window.overrideredirect(True)
+        window.protocol("WM_DELETE_WINDOW", self.close_graph_settings_window)
+        window.bind("<Escape>", lambda _: self.close_graph_settings_window())
+        window.columnconfigure(0, weight=1)
+        window.rowconfigure(1, weight=1)
+        self.graph_settings_window = window
+
+        titlebar = ttk.Frame(window, style="TitleBar.TFrame", height=30, padding=(10, 5))
+        titlebar.grid(row=0, column=0, sticky="ew")
+        titlebar.grid_propagate(False)
+        titlebar.columnconfigure(1, weight=1)
+        self.graph_settings_titlebar = titlebar
+
+        self.graph_settings_titlebar_accent = tk.Frame(titlebar, bg=self.theme.accent, width=4, height=16)
+        self.graph_settings_titlebar_accent.grid(row=0, column=0, sticky="nsw", padx=(0, 8))
+
+        self.graph_settings_title_label = ttk.Label(
+            titlebar,
+            text=self.t("graph_settings_title"),
+            style="TitleBar.TLabel",
+        )
+        self.graph_settings_title_label.grid(row=0, column=1, sticky="w")
+
+        self.graph_settings_close_button = ttk.Button(
+            titlebar,
+            text="X",
+            command=self.close_graph_settings_window,
+            style="TitleBarClose.TButton",
+            width=3,
+        )
+        self.graph_settings_close_button.grid(row=0, column=2, sticky="e")
+        for widget in (titlebar, self.graph_settings_titlebar_accent, self.graph_settings_title_label):
+            widget.bind("<ButtonPress-1>", self.on_graph_settings_drag_start, add="+")
+            widget.bind("<B1-Motion>", self.on_graph_settings_drag_motion, add="+")
+
+        self.graph_settings_days_var = tk.StringVar(value=self.graph_days_var.get())
+        self.graph_settings_show_additions_var = tk.BooleanVar(value=self.graph_show_additions_var.get())
+        self.graph_settings_show_deletions_var = tk.BooleanVar(value=self.graph_show_deletions_var.get())
+        self.graph_settings_show_commits_var = tk.BooleanVar(value=self.graph_show_commits_var.get())
+        self.graph_settings_curve_var = tk.DoubleVar(value=self.graph_curve_var.get())
+
+        card = ttk.Frame(window, style="App.TFrame", padding=(14, 12))
+        card.grid(row=1, column=0, sticky="nsew")
+        card.columnconfigure(1, weight=1)
+
+        self.graph_settings_range_label = ttk.Label(card, style="CardLabel.TLabel")
+        self.graph_settings_range_label.grid(row=0, column=0, sticky="w", padx=(0, 12))
+
+        self.graph_settings_days_combo = ttk.Combobox(
+            card,
+            values=list(GRAPH_DAY_OPTIONS),
+            textvariable=self.graph_settings_days_var,
+            width=8,
+            state="readonly",
+            style="Tracker.TCombobox",
+        )
+        self.graph_settings_days_combo.grid(row=0, column=1, sticky="ew")
+        self._bind_combobox_text_selection_clear(self.graph_settings_days_combo)
+
+        self.graph_settings_metrics_label = ttk.Label(card, style="CardLabel.TLabel")
+        self.graph_settings_metrics_label.grid(row=1, column=0, sticky="nw", padx=(0, 12), pady=(12, 0))
+
+        flags_frame = tk.Frame(card, bd=0, highlightthickness=0, bg=self.theme.app_bg)
+        flags_frame.grid(row=1, column=1, sticky="ew", pady=(12, 0))
+        self.graph_settings_flags_frame = flags_frame
+        for idx, series_name in enumerate(("additions", "deletions", "commits")):
+            button = tk.Button(
+                flags_frame,
+                relief="flat",
+                bd=0,
+                highlightthickness=1,
+                cursor="hand2",
+                command=lambda name=series_name: self.toggle_graph_settings_series(name),
+                padx=10,
+                pady=4,
+            )
+            button.grid(row=0, column=idx, sticky="w", padx=(0, 8 if idx < 2 else 0))
+            self.graph_settings_flag_buttons[series_name] = button
+
+        self.graph_settings_curve_label = ttk.Label(card, style="CardLabel.TLabel")
+        self.graph_settings_curve_label.grid(row=2, column=0, sticky="w", padx=(0, 12), pady=(12, 0))
+
+        curve_row = ttk.Frame(card, style="App.TFrame")
+        curve_row.grid(row=2, column=1, sticky="ew", pady=(12, 0))
+        curve_row.columnconfigure(0, weight=1)
+
+        self.graph_settings_curve_scale = tk.Scale(
+            curve_row,
+            orient="horizontal",
+            from_=0,
+            to=100,
+            showvalue=False,
+            sliderlength=14,
+            width=7,
+            borderwidth=0,
+            highlightthickness=0,
+            relief="flat",
+            variable=self.graph_settings_curve_var,
+            command=self.update_graph_curve_text,
+        )
+        self.graph_settings_curve_scale.grid(row=0, column=0, sticky="ew")
+
+        self.graph_settings_curve_value_label = ttk.Label(curve_row, textvariable=self.graph_curve_text_var, style="Muted.TLabel")
+        self.graph_settings_curve_value_label.grid(row=0, column=1, sticky="e", padx=(10, 0))
+
+        self.graph_settings_apply_button = ttk.Button(card, command=self.apply_graph_settings)
+        self.graph_settings_apply_button.grid(row=3, column=0, columnspan=2, sticky="e", pady=(14, 0))
+
+        self.refresh_graph_settings_window()
+        self.update_graph_curve_text(self.graph_settings_curve_var.get())
+        try:
+            self.root.update_idletasks()
+            x = self.root.winfo_rootx() + 140
+            y = self.root.winfo_rooty() + 110
+            window.geometry(f"+{x}+{y}")
+        except tk.TclError:
+            pass
+        window.lift()
+        window.focus_force()
+
+    def on_graph_settings_drag_start(self, event: tk.Event) -> str:
+        window = self.graph_settings_window
+        if window is not None:
+            self.graph_settings_drag_x = event.x_root - window.winfo_x()
+            self.graph_settings_drag_y = event.y_root - window.winfo_y()
+        return "break"
+
+    def on_graph_settings_drag_motion(self, event: tk.Event) -> str:
+        window = self.graph_settings_window
+        if window is not None:
+            x = event.x_root - getattr(self, "graph_settings_drag_x", 0)
+            y = event.y_root - getattr(self, "graph_settings_drag_y", 0)
+            window.geometry(f"+{x}+{y}")
+        return "break"
+
+    def close_graph_settings_window(self) -> None:
+        window = self.graph_settings_window
+        self.graph_settings_window = None
+        self.graph_settings_days_var = None
+        self.graph_settings_show_additions_var = None
+        self.graph_settings_show_deletions_var = None
+        self.graph_settings_show_commits_var = None
+        self.graph_settings_curve_var = None
+        self.graph_settings_flags_frame = None
+        self.graph_settings_flag_buttons = {}
+        self.graph_settings_range_label = None
+        self.graph_settings_metrics_label = None
+        self.graph_settings_curve_label = None
+        self.graph_settings_apply_button = None
+        self.graph_settings_curve_value_label = None
+        self.graph_settings_days_combo = None
+        self.graph_settings_curve_scale = None
+        if window is not None:
+            try:
+                window.destroy()
+            except tk.TclError:
+                pass
+
+    def refresh_graph_settings_window(self) -> None:
+        window = getattr(self, "graph_settings_window", None)
+        if window is None:
+            return
+        try:
+            if not window.winfo_exists():
+                self.close_graph_settings_window()
+                return
+        except tk.TclError:
+            self.close_graph_settings_window()
+            return
+
+        palette = self.theme
+        window.title(self.t("graph_settings_title"))
+        window.configure(bg=palette.border)
+        if hasattr(self, "graph_settings_titlebar_accent"):
+            self.graph_settings_titlebar_accent.configure(bg=palette.accent)
+        if hasattr(self, "graph_settings_title_label"):
+            self.graph_settings_title_label.configure(text=self.t("graph_settings_title"))
+        if self.graph_settings_flags_frame is not None:
+            self.graph_settings_flags_frame.configure(bg=palette.app_bg)
+        if self.graph_settings_range_label is not None:
+            self.graph_settings_range_label.configure(text=self.t("graph_period"))
+        if self.graph_settings_metrics_label is not None:
+            self.graph_settings_metrics_label.configure(text=self.t("graph_metrics"))
+        if self.graph_settings_curve_label is not None:
+            self.graph_settings_curve_label.configure(text=self.t("graph_curve"))
+        if self.graph_settings_apply_button is not None:
+            self.graph_settings_apply_button.configure(text=self.t("graph_apply"))
+        if self.graph_settings_days_combo is not None:
+            self.graph_settings_days_combo.configure(values=list(GRAPH_DAY_OPTIONS))
+        if self.graph_settings_curve_scale is not None:
+            self.graph_settings_curve_scale.configure(
+                bg=palette.app_bg,
+                troughcolor=palette.graph_grid,
+                activebackground=palette.accent_light,
+                highlightbackground=palette.app_bg,
+                highlightcolor=palette.app_bg,
+                fg=palette.text,
+            )
+        self.update_graph_curve_text(
+            self.graph_settings_curve_var.get() if self.graph_settings_curve_var is not None else self.graph_curve_var.get()
+        )
+        self.refresh_graph_settings_flags()
+
+    def refresh_graph_settings_flags(self) -> None:
+        if not self.graph_settings_flag_buttons:
+            return
+        flag_config = {
+            "additions": (
+                self.t("graph_show_additions"),
+                self.graph_settings_show_additions_var.get() if self.graph_settings_show_additions_var is not None else self.graph_show_additions_var.get(),
+                self.theme.accent,
+            ),
+            "deletions": (
+                self.t("graph_show_deletions"),
+                self.graph_settings_show_deletions_var.get() if self.graph_settings_show_deletions_var is not None else self.graph_show_deletions_var.get(),
+                self.theme.danger,
+            ),
+            "commits": (
+                self.t("graph_show_commits"),
+                self.graph_settings_show_commits_var.get() if self.graph_settings_show_commits_var is not None else self.graph_show_commits_var.get(),
+                self.theme.accent_alt,
+            ),
+        }
+        for series_name, button in self.graph_settings_flag_buttons.items():
+            text, enabled, color = flag_config[series_name]
+            bg = color if enabled else self.theme.card_bg
+            fg = self.theme.button_text if enabled else self.theme.text
+            active_bg = blend_hex(color, self.theme.accent_light, 0.18) if enabled else blend_hex(self.theme.card_bg, color, 0.18)
+            border = blend_hex(color, self.theme.border, 0.25) if enabled else blend_hex(self.theme.border, color, 0.3)
+            button.configure(
+                text=text,
+                bg=bg,
+                fg=fg,
+                activebackground=active_bg,
+                activeforeground=fg,
+                highlightcolor=border,
+                highlightbackground=border,
+                highlightthickness=1,
+                disabledforeground=fg,
+            )
+
+    def toggle_graph_settings_series(self, series_name: str) -> None:
+        if series_name == "additions" and self.graph_settings_show_additions_var is not None:
+            self.graph_settings_show_additions_var.set(not self.graph_settings_show_additions_var.get())
+        elif series_name == "deletions" and self.graph_settings_show_deletions_var is not None:
+            self.graph_settings_show_deletions_var.set(not self.graph_settings_show_deletions_var.get())
+        elif series_name == "commits" and self.graph_settings_show_commits_var is not None:
+            self.graph_settings_show_commits_var.set(not self.graph_settings_show_commits_var.get())
+        self.refresh_graph_settings_flags()
+
+    def update_graph_curve_text(self, value: object) -> None:
+        try:
+            curve_value = float(value)
+        except (TypeError, ValueError):
+            curve_value = float(self.graph_curve_var.get())
+        self.graph_curve_text_var.set(f"{int(round(curve_value))}%")
+
+    def apply_graph_settings(self) -> None:
+        days_var = self.graph_settings_days_var
+        additions_var = self.graph_settings_show_additions_var
+        deletions_var = self.graph_settings_show_deletions_var
+        commits_var = self.graph_settings_show_commits_var
+        curve_var = self.graph_settings_curve_var
+        if days_var is None or additions_var is None or deletions_var is None or commits_var is None or curve_var is None:
+            return
+
+        next_days = days_var.get().strip()
+        if next_days not in GRAPH_DAY_OPTIONS:
+            next_days = self.graph_days_var.get()
+
+        show_additions = additions_var.get()
+        show_deletions = deletions_var.get()
+        show_commits = commits_var.get()
+        if not (show_additions or show_deletions or show_commits):
+            self.show_error(self.t("graph_summary_empty"))
+            return
+
+        next_curve = min(max(float(curve_var.get()), 0.0), 100.0)
+        refresh_required = next_days != self.graph_days_var.get()
+
+        self.graph_days_var.set(next_days)
+        self.graph_show_additions_var.set(show_additions)
+        self.graph_show_deletions_var.set(show_deletions)
+        self.graph_show_commits_var.set(show_commits)
+        self.graph_curve_var.set(next_curve)
+        self.update_graph_curve_text(next_curve)
+        self.save_settings()
+        self.redraw_graph()
+        if refresh_required:
+            self.refresh()
+
+    @staticmethod
+    def _flatten_graph_points(points: list[tuple[float, float]]) -> list[float]:
+        return flatten_graph_screen_points(points)
+
+    @staticmethod
+    def _smooth_graph_points(points: list[tuple[float, float]], curve_strength: float) -> list[tuple[float, float]]:
+        return smooth_graph_screen_points(points, curve_strength)
+
+    def draw_daily_graph(self, highlight_day: dt.date | None) -> None:
         canvas = self.graph_canvas
         palette = self.theme
         canvas.delete("all")
@@ -3678,7 +4916,22 @@ class LineTrackerApp:
             width=1,
         )
 
-        values = [v for _, v in points]
+        active_series = [
+            (series_name, label, color, points)
+            for series_name, label, color, points, enabled in self.graph_series_definitions()
+            if enabled
+        ]
+        if not active_series:
+            canvas.create_text(
+                width / 2,
+                height / 2,
+                text=self.t("graph_summary_empty"),
+                fill=palette.muted_text,
+                font=("Bahnschrift", 10),
+            )
+            return
+
+        values = [value for _, _, _, points in active_series for _, value in points]
         max_val = max(values) if values else 0
         y_top = max(max_val, 1)
 
@@ -3703,42 +4956,52 @@ class LineTrackerApp:
                 font=("Consolas", 8),
             )
 
-        if not points:
-            return
-
-        slot_w = chart_w / len(points)
-        label_step = max(1, math.ceil(len(points) / 6))
-
-        line_points: list[float] = []
+        points = active_series[0][3]
+        slot_w = chart_w / max(len(points), 1)
+        label_step = max(1, math.ceil(len(points) / 6)) if points else 1
         y_base = margin_top + chart_h
-        for idx, (day, value) in enumerate(points):
-            x = margin_left + idx * slot_w + slot_w / 2
-            y = y_base - (value / y_top) * chart_h if y_top > 0 else y_base
-            line_points.extend([x, y])
-
-        if len(line_points) >= 4:
-            canvas.create_line(
-                *line_points,
-                fill=palette.accent,
-                width=2,
-                smooth=False,
-            )
-
         label_y = min(height - 2, y_base + 6)
-        for idx, (day, value) in enumerate(points):
-            x = margin_left + idx * slot_w + slot_w / 2
-            y = y_base - (value / y_top) * chart_h if y_top > 0 else y_base
-            radius = 4 if day == highlight_day else 3
-            color = palette.accent_alt if day == highlight_day else palette.accent
-            canvas.create_oval(
-                x - radius,
-                y - radius,
-                x + radius,
-                y + radius,
-                fill=color,
-                outline="",
-            )
+        curve_strength = min(max(float(self.graph_curve_var.get()), 0.0), 100.0)
 
+        for series_name, _, color, series_points in active_series:
+            point_pairs: list[tuple[float, float]] = []
+            for idx, (_, value) in enumerate(series_points):
+                x = margin_left + idx * slot_w + slot_w / 2
+                y = y_base - (value / y_top) * chart_h if y_top > 0 else y_base
+                point_pairs.append((x, y))
+
+            draw_pairs = self._smooth_graph_points(point_pairs, curve_strength)
+            draw_points = self._flatten_graph_points(draw_pairs)
+
+            if len(draw_points) >= 4:
+                line_kwargs = {
+                    "fill": color,
+                    "width": 2,
+                    "capstyle": tk.ROUND,
+                    "joinstyle": tk.ROUND,
+                }
+                if series_name == "commits":
+                    line_kwargs["dash"] = (4, 2)
+                canvas.create_line(*draw_points, **line_kwargs)
+
+            for idx, (day, value) in enumerate(series_points):
+                x = margin_left + idx * slot_w + slot_w / 2
+                y = y_base - (value / y_top) * chart_h if y_top > 0 else y_base
+                radius = 4 if day == highlight_day else 2
+                outline = palette.canvas_bg if day == highlight_day else ""
+                outline_width = 1 if day == highlight_day else 0
+                canvas.create_oval(
+                    x - radius,
+                    y - radius,
+                    x + radius,
+                    y + radius,
+                    fill=color,
+                    outline=outline,
+                    width=outline_width,
+                )
+
+        for idx, (day, _value) in enumerate(points):
+            x = margin_left + idx * slot_w + slot_w / 2
             if idx == 0 or idx == len(points) - 1 or idx % label_step == 0:
                 canvas.create_text(
                     x,
@@ -3763,25 +5026,6 @@ class LineTrackerApp:
 
     def on_repo_entry_enter(self, _: tk.Event) -> None:
         self.apply_repo_path()
-
-    def memo_labels(self) -> MemoLabels:
-        return MemoLabels(
-            template_title=self.t("memo_template_title"),
-            done_label=self.t("done"),
-            todo_label=self.t("todo"),
-        )
-
-    def default_memo_text(self) -> str:
-        return default_memo_text(self.memo_labels())
-
-    @staticmethod
-    def _placeholder_memo_titles() -> set[str]:
-        return get_placeholder_titles(
-            [
-                str(lang_text.get("memo_template_title", "")).strip()
-                for lang_text in TEXT.values()
-            ]
-        )
 
     def on_graph_days_change(self, _: tk.Event) -> None:
         self.save_settings()
@@ -3861,11 +5105,13 @@ class LineTrackerApp:
         self.repo = repo
         self.repo_selected = True
         self.repo_entry_var.set(str(self.repo))
+        self.schedule_signature = None
         self.ref = resolve_ref(self.repo, "auto")
         self.rebuild_author_controls(reset_invalid_to_auto=True)
         clear_cache_for_repo(self.repo)
         self.update_repo_dependent_controls()
         self.save_settings()
+        self.refresh_schedule(force=True)
         self.refresh()
 
     def on_auto_refresh_toggle(self) -> None:
@@ -3902,9 +5148,13 @@ class LineTrackerApp:
         self.refresh()
 
     def on_close(self) -> None:
+        self.refresh_coordinator.invalidate()
         self.save_settings()
         self.cancel_auto_refresh()
+        self.cancel_schedule_poll()
         self.cancel_compact_clock()
+        self.hide_progress_language_tooltip()
+        self.close_app_settings_window()
         self.root.destroy()
 
 

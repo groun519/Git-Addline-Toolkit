@@ -3,7 +3,7 @@
 Windows-only Git line tracking UI for any Git repository.
 
 - Monthly progress dashboard for committed and uncommitted added lines
-- Commit memo tab with GitHub Desktop-friendly summary/description copy
+- Schedule tab backed by a selectable Markdown file
 - Git grass tab based on daily added lines
 - Theme support
 - 1-minute auto refresh
@@ -16,8 +16,8 @@ Current app version is managed by [VERSION](/c:/Users/groun/Documents/git-reposi
 - Track a target line goal for the current month
 - Show committed totals, branch-only additions, uncommitted additions, and progress bars
 - Show a daily additions graph for 7 to 180 days
-- Edit a raw memo block that is auto-parsed into `Title / DONE / TODO`
-- Copy memo output into GitHub Desktop `Summary` / `Description`
+- Load dated work items and backlog entries from a schedule Markdown file
+- Group schedule items by date and status
 - Show a yearly Git grass view with theme-aware colors
 - Filter by user
   The selector merges obvious duplicates such as primary email and GitHub noreply variants when they resolve to the same handle.
@@ -97,25 +97,23 @@ Current app version is managed by [VERSION](/c:/Users/groun/Documents/git-reposi
 - `현재 변경 + / -`
 - `일별 추가줄 그래프`
 
-### Commit Memo Tab
+### Schedule Tab
 
-- 원문 텍스트 하나를 자유롭게 편집합니다.
-- 첫 줄은 제목, 나머지는 `DONE / TODO`로 자동 분리됩니다.
-- 미리보기에서 항목을 `DONE`과 `TODO` 사이로 이동할 수 있습니다.
-- `제목 복사` / `설명 복사`로 GitHub Desktop에 붙여넣을 수 있습니다.
-- 메모는 자동 저장됩니다.
+- 설정에서 일정 Markdown 파일 경로를 선택합니다.
+- `@@DAY YYYY-MM-DD` 아래 항목은 해당 날짜 일정으로 표시됩니다.
+- 날짜가 정해지지 않은 항목은 `@@BACKLOG` 아래에 둡니다.
+- 다음 `@@DAY` 또는 `@@BACKLOG`, 파일 끝이 현재 구역의 종료점입니다.
 
-기본 양식 예시:
+일정 파일 예시:
 
 ```text
-[제목 입력]
+@@DAY 2026-08-01
+ITEM-001 | IN_PROGRESS | 18:00~22:00 | Inventory Domain Contract
+- 상세 내용
 
-DONE
--
-
-TODO
--
--
+@@BACKLOG
+ITEM-002 | PLANNED | | Item Core
+- 상세 내용
 ```
 
 ### Git Grass Tab
@@ -143,7 +141,14 @@ CLI도 직접 실행할 수 있습니다.
 python app\line_tracker.py --repo C:\path\to\repo
 ```
 
-UI는 같은 엔진을 사용합니다.
+UI는 같은 엔진을 사용하며, 현재 기본 데스크톱 UI는 `PySide6` 기반입니다.
+
+```bat
+python -m pip install -r requirements.txt
+python app\line_tracker_ui.pyw --repo C:\path\to\repo
+```
+
+이전 Tk UI가 필요한 경우 `python app\line_tracker_tk.pyw`로 실행할 수 있습니다.
 
 ## Build Installer
 
@@ -152,6 +157,7 @@ UI는 같은 엔진을 사용합니다.
 ### Prerequisites
 
 - Python 3.10+
+- `requirements.txt`의 PySide6 런타임(빌드 스크립트가 자동 설치)
 - Inno Setup
 
 ### Optional: Bundle Git
@@ -202,4 +208,4 @@ exe_maker\build_installer.bat
 
 - 미커밋 추가줄에는 untracked text file도 포함됩니다.
 - rename handling은 GitHub-style 통계에 가깝게 맞추기 위해 꺼져 있습니다.
-- 현재 저장소에는 테스트 23개가 포함돼 있습니다.
+- 현재 저장소에는 자동화 테스트가 포함돼 있습니다.

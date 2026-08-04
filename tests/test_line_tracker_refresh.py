@@ -13,6 +13,19 @@ from line_tracker_refresh import build_refresh_snapshot, get_grass_date_range
 
 
 class RefreshSnapshotTests(unittest.TestCase):
+    @patch("line_tracker_refresh._compute_overall_commit_count", return_value=98)
+    @patch("line_tracker_refresh._compute_overall_active_days", return_value=12)
+    @patch("line_tracker_refresh._compute_branch_active_days", return_value=3)
+    @patch("line_tracker_refresh._compute_branch_commit_count", return_value=4)
+    @patch("line_tracker_refresh._compute_daily_commit_count", return_value=2)
+    @patch(
+        "line_tracker_refresh.get_committed_insertions_by_language_combined",
+        return_value={"C++": 3},
+    )
+    @patch("line_tracker_refresh.get_uncommitted_insertions_by_language", return_value={"Python": 7})
+    @patch("line_tracker_refresh.get_project_language_lines", return_value={"C++": 4000, "JSON": 321})
+    @patch("line_tracker_refresh.get_commit_counts_by_date_combined", return_value={})
+    @patch("line_tracker_refresh.get_committed_deletions_by_date_combined", return_value={})
     @patch("line_tracker_refresh.get_committed_deletions", side_effect=[2, 6, 2])
     @patch("line_tracker_refresh.get_uncommitted_deletions", return_value=4)
     @patch(
@@ -38,6 +51,16 @@ class RefreshSnapshotTests(unittest.TestCase):
         mock_by_date,
         _mock_uncommitted_deletions,
         _mock_committed_deletions,
+        _mock_deletions_by_date,
+        _mock_commit_counts_by_date,
+        _mock_project_language_lines,
+        _mock_uncommitted_language_lines,
+        _mock_committed_language_lines,
+        _mock_daily_commit_count,
+        _mock_branch_active_days,
+        _mock_branch_commit_count,
+        _mock_overall_active_days,
+        _mock_overall_commit_count,
     ) -> None:
         today = dt.date.today()
         result = TrackerResult(
@@ -75,11 +98,23 @@ class RefreshSnapshotTests(unittest.TestCase):
         self.assertEqual(snapshot.result, result)
         self.assertEqual(snapshot.branch_total, 5)
         self.assertEqual(snapshot.branch_deletions, 2)
+        self.assertEqual(snapshot.branch_active_days, 3)
+        self.assertEqual(snapshot.daily_commit_count, 2)
+        self.assertEqual(snapshot.branch_commit_count, 4)
+        self.assertEqual(snapshot.overall_commit_count, 98)
+        self.assertEqual(snapshot.overall_active_days, 12)
         self.assertEqual(snapshot.overall_deletions, 20)
+        self.assertEqual(snapshot.project_total_lines, 4321)
+        self.assertEqual(snapshot.project_language_lines, {"C++": 4000, "JSON": 321})
+        self.assertEqual(snapshot.overall_progress_language_lines, {"C++": 4000, "JSON": 321})
+        self.assertEqual(snapshot.daily_progress_language_lines, {"C++": 3, "Python": 7})
         self.assertEqual(snapshot.today_done, 10)
         self.assertEqual(snapshot.today_target, 10)
         self.assertEqual(snapshot.uncommitted_deletions, 4)
         self.assertEqual(snapshot.points, [(today - dt.timedelta(days=2), 1), (today - dt.timedelta(days=1), 2), (today, 10)])
+        self.assertEqual(snapshot.graph_added_points, snapshot.points)
+        self.assertEqual(snapshot.graph_deleted_points, [(today - dt.timedelta(days=2), 0), (today - dt.timedelta(days=1), 0), (today, 4)])
+        self.assertEqual(snapshot.graph_commit_points, [(today - dt.timedelta(days=2), 0), (today - dt.timedelta(days=1), 0), (today, 0)])
         self.assertEqual(len(snapshot.grass_points), grass_length)
         self.assertEqual(snapshot.grass_points[0][0], grass_start)
         self.assertEqual(snapshot.grass_points[-1][0], grass_end)
@@ -88,6 +123,19 @@ class RefreshSnapshotTests(unittest.TestCase):
         self.assertAlmostEqual(snapshot.graph_avg, 13 / 3)
         self.assertEqual(snapshot.share_text, "75.0%")
 
+    @patch("line_tracker_refresh._compute_overall_commit_count", return_value=98)
+    @patch("line_tracker_refresh._compute_overall_active_days", return_value=12)
+    @patch("line_tracker_refresh._compute_branch_active_days", return_value=3)
+    @patch("line_tracker_refresh._compute_branch_commit_count", return_value=4)
+    @patch("line_tracker_refresh._compute_daily_commit_count", return_value=2)
+    @patch(
+        "line_tracker_refresh.get_committed_insertions_by_language_combined",
+        return_value={"C++": 3},
+    )
+    @patch("line_tracker_refresh.get_uncommitted_insertions_by_language", return_value={"Python": 7})
+    @patch("line_tracker_refresh.get_project_language_lines", return_value={"C++": 4000, "JSON": 321})
+    @patch("line_tracker_refresh.get_commit_counts_by_date_combined", return_value={})
+    @patch("line_tracker_refresh.get_committed_deletions_by_date_combined", return_value={})
     @patch("line_tracker_refresh.get_committed_deletions", side_effect=[2, 6, 2])
     @patch("line_tracker_refresh.get_uncommitted_deletions", return_value=0)
     @patch(
@@ -115,6 +163,16 @@ class RefreshSnapshotTests(unittest.TestCase):
         mock_by_date,
         _mock_uncommitted_deletions,
         _mock_committed_deletions,
+        _mock_deletions_by_date,
+        _mock_commit_counts_by_date,
+        _mock_project_language_lines,
+        _mock_uncommitted_language_lines,
+        _mock_committed_language_lines,
+        _mock_daily_commit_count,
+        _mock_branch_active_days,
+        _mock_branch_commit_count,
+        _mock_overall_active_days,
+        _mock_overall_commit_count,
     ) -> None:
         today = dt.date.today()
         result = TrackerResult(
@@ -144,7 +202,16 @@ class RefreshSnapshotTests(unittest.TestCase):
 
         self.assertEqual(snapshot.branch_total, 5)
         self.assertEqual(snapshot.branch_deletions, 2)
+        self.assertEqual(snapshot.branch_active_days, 3)
+        self.assertEqual(snapshot.daily_commit_count, 2)
+        self.assertEqual(snapshot.branch_commit_count, 4)
+        self.assertEqual(snapshot.overall_commit_count, 98)
+        self.assertEqual(snapshot.overall_active_days, 12)
         self.assertEqual(snapshot.overall_deletions, 20)
+        self.assertEqual(snapshot.project_total_lines, 4321)
+        self.assertEqual(snapshot.project_language_lines, {"C++": 4000, "JSON": 321})
+        self.assertEqual(snapshot.overall_progress_language_lines, {"C++": 4000, "JSON": 321})
+        self.assertEqual(snapshot.daily_progress_language_lines, {"C++": 3, "Python": 7})
         self.assertEqual(snapshot.today_done, 10)
         self.assertEqual(snapshot.share_text, "75.0%")
         mock_resolve_ref.assert_called_once_with(Path("C:/repo"), "auto")

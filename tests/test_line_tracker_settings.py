@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 import sys
+from unittest.mock import Mock, patch
 
 APP_DIR = Path(__file__).resolve().parents[1] / "app"
 if str(APP_DIR) not in sys.path:
@@ -33,7 +34,32 @@ class _FakeSettingsApp:
         self.legacy_settings_path = legacy_settings_path
 
 
+class _FakeScheduleLocationApp:
+    def __init__(self, repo: Path, schedule_path: str) -> None:
+        self.repo = repo
+        self.schedule_path = schedule_path
+        self.show_error = Mock()
+
+    @staticmethod
+    def t(key: str) -> str:
+        return key
+
+
 class SettingsTests(unittest.TestCase):
+    def test_open_schedule_location_opens_selected_file_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            repo = Path(tmp_dir)
+            schedule_path = repo / "docs" / "SCHEDULE.md"
+            schedule_path.parent.mkdir()
+            schedule_path.write_text("@@BACKLOG", encoding="utf-8")
+            app = _FakeScheduleLocationApp(repo, "docs/SCHEDULE.md")
+
+            with patch("line_tracker_ui.os.startfile") as open_location:
+                LineTrackerApp.open_schedule_location(app)
+
+        open_location.assert_called_once_with(str(schedule_path.parent))
+        app.show_error.assert_not_called()
+
     def test_build_author_option_entries_deduplicates_same_email_targets(self) -> None:
         options, mapping, aliases = LineTrackerApp._build_author_option_entries(
             [
@@ -80,7 +106,7 @@ class SettingsTests(unittest.TestCase):
             "groun519 <groun519@gmail.com>",
         )
 
-    def test_ui_settings_from_dict_preserves_defaults_and_legacy_fields(self) -> None:
+    def test_ui_settings_from_dict_preserves_defaults(self) -> None:
         settings = UISettings.from_dict(
             {
                 "repo_path": "C:/repo",
@@ -89,9 +115,6 @@ class SettingsTests(unittest.TestCase):
                 "goal": 123,
                 "compact_variant": "strip",
                 "compact_alpha": 0.73,
-                "note_title": "legacy title",
-                "note_done": "done line",
-                "note_todo": "todo line",
             }
         )
 
@@ -101,10 +124,9 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.goal, 123)
         self.assertEqual(settings.compact_variant, "strip")
         self.assertEqual(settings.compact_alpha, 0.73)
-        self.assertEqual(settings.legacy_note_title, "legacy title")
-        self.assertEqual(settings.legacy_note_done, "done line")
-        self.assertEqual(settings.legacy_note_todo, "todo line")
         self.assertEqual(settings.graph_days, "14")
+        self.assertEqual(settings.note_tab, "schedule")
+        self.assertEqual(settings.schedule_path, "")
 
     def test_ui_settings_to_dict_only_writes_current_keys(self) -> None:
         settings = UISettings(
@@ -119,10 +141,10 @@ class SettingsTests(unittest.TestCase):
             custom_today_enabled=True,
             custom_today="2026-03-12",
             auto_refresh=False,
-            memo_text="Title",
             compact_variant="strip",
             compact_alpha=0.73,
-            legacy_note_title="unused",
+            note_tab="grass",
+            schedule_path="docs/SCHEDULE.md",
         )
 
         self.assertEqual(
@@ -132,18 +154,47 @@ class SettingsTests(unittest.TestCase):
                 "custom_today_enabled": True,
                 "custom_today": "2026-03-12",
                 "graph_days": "30",
+                "graph_show_additions": True,
+                "graph_show_deletions": False,
+                "graph_show_commits": False,
+                "graph_curve": 35.0,
                 "auto_refresh": False,
                 "author": "me",
                 "author_display": "Auto",
-                "memo_text": "Title",
                 "compact_variant": "strip",
                 "compact_alpha": 0.73,
+                "note_tab": "grass",
+                "schedule_path": "docs/SCHEDULE.md",
                 "repo_path": "C:/repo",
                 "lang": "ko",
                 "theme": "cream",
                 "geometry": "1200x700+10+20",
             },
         )
+
+    def test_ui_settings_migrates_legacy_todo_tab_to_schedule(self) -> None:
+        settings = UISettings.from_dict(
+            {
+                "note_tab": "todo",
+                "todo_items": [
+                    {"text": "First", "done": False, "created_at": "2026-06-04T15:40:00"},
+                ],
+            }
+        )
+
+        self.assertEqual(settings.note_tab, "schedule")
+        self.assertNotIn("todo_items", settings.to_dict())
+
+    def test_ui_settings_accepts_schedule_tab_and_path(self) -> None:
+        settings = UISettings.from_dict(
+            {
+                "note_tab": "schedule",
+                "schedule_path": " docs/plan.md ",
+            }
+        )
+
+        self.assertEqual(settings.note_tab, "schedule")
+        self.assertEqual(settings.schedule_path, "docs/plan.md")
 
     def test_load_settings_falls_back_to_legacy_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

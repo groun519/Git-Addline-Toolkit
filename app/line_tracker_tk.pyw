@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from qt_app.main import main
+from line_tracker_ui import main
 
 
 if __name__ == "__main__":
