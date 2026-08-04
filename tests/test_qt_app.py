@@ -10,7 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
     from PySide6.QtCore import QPoint, Qt
-    from PySide6.QtWidgets import QApplication, QWidget
+    from PySide6.QtWidgets import QApplication, QFrame, QWidget
 except ImportError:
     QApplication = None
 
@@ -85,6 +85,33 @@ class QtApplicationTests(unittest.TestCase):
         self.assertEqual(values.author_raw, "auto")
         self.assertEqual(dialog.tabs.count(), 5)
 
+    def test_commit_history_rows_keep_readable_scroll_height(self) -> None:
+        from line_tracker import CommitChangeEntry
+        from qt_app.history_view import CommitHistoryView
+
+        view = CommitHistoryView(lambda key, **kwargs: key.format(**kwargs))
+        view.resize(380, 220)
+        view.show()
+        entries = [
+            CommitChangeEntry(
+                commit_hash=f"hash-{index}",
+                short_hash=f"h{index:06d}",
+                date=dt.date(2026, 8, 4),
+                subject=f"Commit {index}",
+                insertions=index + 1,
+                deletions=index,
+            )
+            for index in range(20)
+        ]
+        view.append_entries(entries, exhausted=True)
+        self.app.processEvents()
+
+        rows = [child for child in view.findChildren(QFrame) if child.objectName() == "HistoryRow"]
+        self.assertEqual(len(rows), len(entries))
+        self.assertTrue(all(row.minimumHeight() >= 30 for row in rows))
+        self.assertGreater(view.scroll.verticalScrollBar().maximum(), 0)
+        view.close()
+
     def test_compact_overlay_variants_keep_fixed_contracts(self) -> None:
         from line_tracker_theme import get_theme_palette
         from qt_app.overlay import CompactOverlay
@@ -114,15 +141,29 @@ class QtApplicationTests(unittest.TestCase):
 
         self.assertTrue(window.project_title.isVisible())
         self.assertTrue(window.progress_panel.isVisible())
+        self.assertTrue(window.graph_panel.isVisible())
+        self.assertTrue(window.history_view.isVisible())
         self.assertTrue(window.workspace_tabs.isVisible())
         self.assertGreater(window.stats_scroll.verticalScrollBar().maximum(), 0)
+        self.assertEqual(window.workspace_tabs.count(), 2)
 
         stats_right = window.stats_column.mapTo(window, QPoint(window.stats_column.width(), 0)).x()
+        center_left = window.center_column.mapTo(window, QPoint(0, 0)).x()
+        center_right = window.center_column.mapTo(window, QPoint(window.center_column.width(), 0)).x()
         workspace_left = window.workspace_tabs.mapTo(window, QPoint(0, 0)).x()
         scroll_bottom = window.stats_scroll.mapTo(window, QPoint(0, window.stats_scroll.height())).y()
         progress_top = window.progress_panel.mapTo(window, QPoint(0, 0)).y()
-        self.assertLessEqual(stats_right, workspace_left)
+        graph_bottom = window.graph_panel.mapTo(window, QPoint(0, window.graph_panel.height())).y()
+        history_top = window.history_view.mapTo(window, QPoint(0, 0)).y()
+        self.assertLessEqual(stats_right, center_left)
+        self.assertLessEqual(center_right, workspace_left)
         self.assertLessEqual(scroll_bottom, progress_top)
+        self.assertLessEqual(graph_bottom, history_top)
+
+        window.workspace_tabs.setCurrentIndex(1)
+        self.app.processEvents()
+        self.assertTrue(window.activity_graph.isVisible())
+        self.assertTrue(window.history_view.isVisible())
         window.close()
 
 

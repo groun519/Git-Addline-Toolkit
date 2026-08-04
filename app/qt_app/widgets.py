@@ -435,10 +435,18 @@ class ActivityGraph(QWidget):
                 painter.drawEllipse(QPoint(round(x_pos), round(y_pos)), round(radius), round(radius))
 
         if first_points:
-            label_step = max(1, len(first_points) // 6)
+            max_labels = max(2, min(7, int(chart.width() // 64)))
+            label_count = min(len(first_points), max_labels)
+            if label_count <= 1:
+                label_indices = {0}
+            else:
+                label_indices = {
+                    round(index * (len(first_points) - 1) / (label_count - 1))
+                    for index in range(label_count)
+                }
             painter.setPen(QColor(self._tokens.muted))
             for index, (day, _value) in enumerate(first_points):
-                if index in {0, len(first_points) - 1} or index % label_step == 0:
+                if index in label_indices:
                     x_pos = chart.left() + slot * index + slot / 2
                     painter.drawText(QRectF(x_pos - 28, chart.bottom() + 6, 56, 18), Qt.AlignmentFlag.AlignCenter, day.strftime("%m-%d"))
         painter.end()

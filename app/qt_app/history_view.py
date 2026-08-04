@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QScrollArea, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QLayout, QScrollArea, QVBoxLayout, QWidget
 
 from line_tracker import CommitChangeEntry
 
 
-class CommitHistoryView(QWidget):
+class CommitHistoryView(QFrame):
     load_more_requested = Signal()
 
     def __init__(self, translate) -> None:
         super().__init__()
+        self.setObjectName("Panel")
         self.t = translate
         self.entries: list[CommitChangeEntry] = []
         self.loading = False
@@ -29,6 +30,7 @@ class CommitHistoryView(QWidget):
         self.items_layout = QVBoxLayout(self.host)
         self.items_layout.setContentsMargins(0, 0, 5, 0)
         self.items_layout.setSpacing(3)
+        self.items_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinAndMaxSize)
         self.scroll.setWidget(self.host)
         self.scroll.verticalScrollBar().valueChanged.connect(self._on_scroll)
         layout.addWidget(self.scroll, 1)
@@ -75,6 +77,7 @@ class CommitHistoryView(QWidget):
     def _make_row(self, entry: CommitChangeEntry) -> QFrame:
         row = QFrame()
         row.setObjectName("HistoryRow")
+        row.setMinimumHeight(30)
         layout = QHBoxLayout(row)
         layout.setContentsMargins(9, 7, 9, 7)
         layout.setSpacing(8)

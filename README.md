@@ -59,7 +59,7 @@ Current app version is managed by [VERSION](/c:/Users/groun/Documents/git-reposi
 
 ## Source Quick Start
 
-1. [line_tracker_ui_click.vbs](/c:/Users/groun/Documents/git-repositories/PROJECT-MA/tools/Git-Addline-Toolkit/line_tracker_ui_click.vbs)를 실행합니다.
+1. [run_line_tracker.bat](/c:/Users/groun/Documents/git-repositories/PROJECT-MA/tools/Git-Addline-Toolkit/run_line_tracker.bat)를 더블클릭합니다. 콘솔을 숨기려면 [line_tracker_ui_click.vbs](/c:/Users/groun/Documents/git-repositories/PROJECT-MA/tools/Git-Addline-Toolkit/line_tracker_ui_click.vbs)를 사용합니다.
 2. UI에서 `리포 경로`를 설정합니다.
 3. `리포 선택`을 누릅니다.
 4. `새로고침`을 누릅니다.
@@ -68,8 +68,10 @@ Current app version is managed by [VERSION](/c:/Users/groun/Documents/git-reposi
 
 ## What Runs What
 
+- [run_line_tracker.bat](/c:/Users/groun/Documents/git-repositories/PROJECT-MA/tools/Git-Addline-Toolkit/run_line_tracker.bat)
+  `.venv`의 최신 소스를 우선 실행하고, 없으면 빌드된 EXE나 전역 `pythonw`를 사용합니다.
 - [line_tracker_ui_click.vbs](/c:/Users/groun/Documents/git-repositories/PROJECT-MA/tools/Git-Addline-Toolkit/line_tracker_ui_click.vbs)
-  Source 실행용 런처입니다. `pythonw`가 있으면 콘솔 없이 실행합니다.
+  위 BAT를 콘솔 없이 실행하는 래퍼입니다.
 - [app/line_tracker_ui.pyw](/c:/Users/groun/Documents/git-repositories/PROJECT-MA/tools/Git-Addline-Toolkit/app/line_tracker_ui.pyw)
   GUI 진입점입니다.
 - [app/line_tracker_ui.py](/c:/Users/groun/Documents/git-repositories/PROJECT-MA/tools/Git-Addline-Toolkit/app/line_tracker_ui.py)

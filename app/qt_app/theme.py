@@ -243,7 +243,7 @@ def build_stylesheet(tokens: QtThemeTokens) -> str:
             border-radius: 14px;
             top: -1px;
         }}
-        QTabWidget#WorkspaceTabs QTabBar::tab {{ min-width: 76px; }}
+        QTabWidget#WorkspaceTabs QTabBar::tab {{ min-width: 52px; padding: 0 6px; }}
 
         QScrollArea {{ background: transparent; border: 0; }}
         QScrollArea > QWidget > QWidget {{ background: transparent; }}

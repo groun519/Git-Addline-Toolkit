@@ -111,7 +111,7 @@ def main() -> int:
                 return
             if args.surface == "history" and not history_settled:
                 history_settled = True
-                QTimer.singleShot(250, capture_when_ready)
+                QTimer.singleShot(500, capture_when_ready)
                 return
             else:
                 try:
@@ -144,13 +144,12 @@ def _prepare_surface(window: LineTrackerQtWindow, surface: str):
         window.workspace_tabs.setCurrentIndex(0)
         return window
     if surface == "schedule":
-        window.workspace_tabs.setCurrentIndex(1)
+        window.workspace_tabs.setCurrentIndex(0)
         return window
     if surface == "grass":
-        window.workspace_tabs.setCurrentIndex(2)
+        window.workspace_tabs.setCurrentIndex(1)
         return window
     if surface == "history":
-        window.workspace_tabs.setCurrentIndex(3)
         return window
     if surface.startswith("settings"):
         options, mapping, aliases = window._build_author_options()

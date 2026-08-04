@@ -279,8 +279,8 @@ class LineTrackerQtWindow(QMainWindow):
         self.stats_scroll.setWidget(stats_content)
 
         self.stats_column = QWidget()
-        self.stats_column.setMinimumWidth(360)
-        self.stats_column.setMaximumWidth(590)
+        self.stats_column.setMinimumWidth(320)
+        self.stats_column.setMaximumWidth(480)
         stats_column_layout = QVBoxLayout(self.stats_column)
         stats_column_layout.setContentsMargins(0, 0, 0, 0)
         stats_column_layout.setSpacing(10)
@@ -288,11 +288,32 @@ class LineTrackerQtWindow(QMainWindow):
         self.progress_panel = self._build_progress_panel()
         stats_column_layout.addWidget(self.progress_panel)
 
-        self.workspace_tabs = QTabWidget()
-        self.workspace_tabs.setObjectName("WorkspaceTabs")
-        graph_panel = QFrame()
-        graph_panel.setObjectName("WorkspacePage")
-        graph_layout = QVBoxLayout(graph_panel)
+        self.center_column = self._build_center_column()
+        self.workspace_tabs = self._build_workspace_tabs()
+
+        body.addWidget(self.stats_column, 4)
+        body.addWidget(self.center_column, 4)
+        body.addWidget(self.workspace_tabs, 5)
+        return body
+
+    def _build_center_column(self) -> QWidget:
+        column = QWidget()
+        column.setMinimumWidth(230)
+        layout = QVBoxLayout(column)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+        self.graph_panel = self._build_graph_panel()
+        self.history_view = CommitHistoryView(self.t)
+        self.history_view.setMinimumHeight(110)
+        self.history_view.load_more_requested.connect(self.load_next_commit_history_page)
+        layout.addWidget(self.graph_panel, 3)
+        layout.addWidget(self.history_view, 2)
+        return column
+
+    def _build_graph_panel(self) -> QWidget:
+        panel = QFrame()
+        panel.setObjectName("Panel")
+        graph_layout = QVBoxLayout(panel)
         graph_layout.setContentsMargins(14, 12, 14, 12)
         graph_layout.setSpacing(8)
         graph_header = QHBoxLayout()
@@ -306,30 +327,27 @@ class LineTrackerQtWindow(QMainWindow):
         self.activity_graph = ActivityGraph()
         self.graph_summary = QLabel(self.t("graph_summary_empty"))
         self.graph_summary.setObjectName("MutedLabel")
+        self.graph_summary.setWordWrap(True)
         graph_layout.addLayout(graph_header)
         graph_layout.addWidget(self.activity_graph, 1)
         graph_layout.addWidget(self.graph_summary)
+        return panel
 
+    def _build_workspace_tabs(self) -> QTabWidget:
+        tabs = QTabWidget()
+        tabs.setObjectName("WorkspaceTabs")
+        tabs.setMinimumWidth(240)
         self.schedule_view = ScheduleView(self.t)
         self.schedule_view.select_requested.connect(self.browse_schedule_file)
         self.schedule_view.reload_requested.connect(lambda: self._load_schedule(force=True))
         self.schedule_view.location_requested.connect(self.open_schedule_location)
         self.grass_view = GrassView(self.t, self.format_month_label)
-        self.history_view = CommitHistoryView(self.t)
-        self.history_view.load_more_requested.connect(self.load_next_commit_history_page)
-        self.workspace_tabs.addTab(graph_panel, make_icon("chart", self.tokens.text), self.t("tab_activity"))
-        self.workspace_tabs.addTab(self.schedule_view, make_icon("calendar", self.tokens.text), self.t("tab_schedule"))
-        self.workspace_tabs.addTab(self.grass_view, make_icon("grass", self.tokens.text), self.t("tab_grass"))
-        self.workspace_tabs.addTab(self.history_view, make_icon("history", self.tokens.text), self.t("tab_history"))
+        tabs.addTab(self.schedule_view, make_icon("calendar", self.tokens.text), self.t("tab_schedule"))
+        tabs.addTab(self.grass_view, make_icon("grass", self.tokens.text), self.t("tab_grass"))
         if self.settings.note_tab == "grass":
-            self.workspace_tabs.setCurrentIndex(2)
-        elif self.settings.note_tab == "schedule":
-            self.workspace_tabs.setCurrentIndex(1)
-        self.workspace_tabs.currentChanged.connect(self._on_workspace_tab_changed)
-
-        body.addWidget(self.stats_column, 5)
-        body.addWidget(self.workspace_tabs, 7)
-        return body
+            tabs.setCurrentIndex(1)
+        tabs.currentChanged.connect(self._on_workspace_tab_changed)
+        return tabs
 
     def _build_progress_panel(self) -> QWidget:
         panel = QFrame()
@@ -376,7 +394,7 @@ class LineTrackerQtWindow(QMainWindow):
         self.activity_graph.set_theme_tokens(self.tokens)
         self.schedule_view.set_theme_tokens(self.tokens)
         self.grass_view.set_theme_tokens(self.tokens)
-        for index, icon_name in enumerate(("chart", "calendar", "grass", "history")):
+        for index, icon_name in enumerate(("calendar", "grass")):
             self.workspace_tabs.setTabIcon(index, make_icon(icon_name, self.tokens.text))
 
     def _update_repo_header(self) -> None:
@@ -551,9 +569,9 @@ class LineTrackerQtWindow(QMainWindow):
 
     def _on_workspace_tab_changed(self, index: int) -> None:
         note_tab = None
-        if index == 1:
+        if index == 0:
             note_tab = "schedule"
-        elif index == 2:
+        elif index == 1:
             note_tab = "grass"
         if note_tab is not None and note_tab != self.settings.note_tab:
             self.settings = replace(self.settings, note_tab=note_tab)

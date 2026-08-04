@@ -1,12 +1,11 @@
 Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 curDir = fso.GetParentFolderName(WScript.ScriptFullName)
+launcher = curDir & "\run_line_tracker.bat"
 
-py = "pythonw"
-rc = shell.Run("cmd /c where pythonw >nul 2>nul", 0, True)
-If rc <> 0 Then
-    py = "python"
+If Not fso.FileExists(launcher) Then
+    MsgBox "Line Tracker launcher not found:" & vbCrLf & launcher, 16, "Line Tracker"
+    WScript.Quit 1
 End If
 
-cmd = """" & py & """ """ & curDir & "\app\line_tracker_ui.pyw"""
-shell.Run cmd, 0, False
+shell.Run """" & launcher & """", 0, False
