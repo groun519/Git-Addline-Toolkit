@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
@@ -33,6 +33,8 @@ class ScheduleItem:
     status: str = SCHEDULE_STATUS_PLANNED
     time_range: str = ""
     section: str = ""
+    source_start_line: int = field(default=-1, compare=False, repr=False)
+    source_end_line: int = field(default=-1, compare=False, repr=False)
 
     def __post_init__(self) -> None:
         normalized_status = self.status if self.status in SCHEDULE_STATUSES else SCHEDULE_STATUS_PLANNED
@@ -77,6 +79,8 @@ class _PendingScheduleItem:
     title: str
     date: dt.date | None
     details: list[str]
+    source_start_line: int
+    source_end_line: int
 
     def build(self) -> ScheduleItem:
         return ScheduleItem(
@@ -86,6 +90,8 @@ class _PendingScheduleItem:
             description="\n".join(self.details),
             status=self.status,
             time_range=self.time_range,
+            source_start_line=self.source_start_line,
+            source_end_line=self.source_end_line,
         )
 
 
@@ -155,6 +161,7 @@ class DirectiveScheduleParser:
                 detail = line[1:].strip()
                 if detail:
                     pending.details.append(detail)
+                pending.source_end_line = line_number
                 continue
 
             if line.count("|") == 3:
@@ -181,6 +188,8 @@ class DirectiveScheduleParser:
                     title=title,
                     date=current_date,
                     details=[],
+                    source_start_line=line_number - 1,
+                    source_end_line=line_number,
                 )
                 continue
 
@@ -191,6 +200,7 @@ class DirectiveScheduleParser:
                 raise ScheduleParseError(line_number, "expected 'ID | STATUS | TIME | TITLE'")
 
             pending.details.append(line)
+            pending.source_end_line = line_number
 
         flush_pending()
         return ScheduleDocument(

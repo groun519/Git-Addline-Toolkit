@@ -1,3 +1,4 @@
+import datetime as dt
 import unittest
 from pathlib import Path
 import sys
@@ -12,6 +13,7 @@ from line_tracker import (
     classify_text_language,
     get_project_language_lines,
     merge_language_totals,
+    parse_numstat_insertions_by_date_and_language,
     parse_numstat_insertions_by_language,
 )
 
@@ -43,6 +45,25 @@ class LanguageLineTests(unittest.TestCase):
         )
 
         self.assertEqual(result, {"C++": 10, "Python": 4, "Other": 2})
+
+    def test_parse_numstat_insertions_by_date_and_language_groups_each_day(self) -> None:
+        result = parse_numstat_insertions_by_date_and_language(
+            "@@DATE@@2026-08-05\n"
+            "12\t2\tSource/Player.cpp\n"
+            "3\t0\tData/config.json\n"
+            "@@DATE@@2026-08-06\n"
+            "7\t1\tSource/Player.h\n"
+            "4\t0\tscripts/tool.py\n"
+            "20\t0\tContent/Asset.uasset\n"
+        )
+
+        self.assertEqual(
+            result,
+            {
+                dt.date(2026, 8, 5): {"C++": 12, "JSON": 3},
+                dt.date(2026, 8, 6): {"C++": 7, "Python": 4},
+            },
+        )
 
     @patch("line_tracker.count_text_lines")
     @patch("line_tracker.run_git")

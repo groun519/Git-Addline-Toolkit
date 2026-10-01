@@ -64,6 +64,7 @@ LANGUAGE_EXTENSION_GROUPS: tuple[tuple[str, frozenset[str]], ...] = (
     ("Scripts", frozenset({".ps1", ".bat", ".cmd", ".sh"})),
     ("Docs", frozenset({".md", ".mdx", ".rst", ".txt"})),
 )
+LANGUAGE_NAMES = tuple(language for language, _extensions in LANGUAGE_EXTENSION_GROUPS) + ("Other",)
 SHORTSTAT_INSERTIONS_RE = re.compile(r"(\d+)\s+insertions?\(\+\)")
 SHORTSTAT_DELETIONS_RE = re.compile(r"(\d+)\s+deletions?\(-\)")
 
@@ -79,6 +80,10 @@ _PROJECT_TOTAL_LINES_CACHE: dict[tuple[str, str, str], int] = {}
 _COMMIT_COUNT_CACHE: dict[tuple[str, str, str, str, str, str, str, str], int] = {}
 _ACTIVE_COMMIT_DATES_CACHE: dict[tuple[str, str, str, str, str, str], tuple[str, ...]] = {}
 _LANGUAGE_INSERTIONS_CACHE: dict[tuple[str, str, str, str, str, str, str, str], dict[str, int]] = {}
+_LANGUAGE_BY_DATE_CACHE: dict[
+    tuple[str, str, str, str, str, str, str, str],
+    dict[dt.date, dict[str, int]],
+] = {}
 _CACHE_LOCK = threading.RLock()
 _CACHE_LOADED = False
 _CACHE_DIRTY = False
@@ -263,6 +268,7 @@ class TrackerConfig:
     today: dt.date | None = None
     month_end: dt.date | None = None
     assume_uncommitted_zero: bool = False
+    selected_branches: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -287,6 +293,37 @@ class CommitChangeEntry:
     deletions: int
 
 
+@dataclass(frozen=True)
+class CommitFileChange:
+    path: str
+    insertions: int | None
+    deletions: int | None
+
+    @property
+    def is_binary(self) -> bool:
+        return self.insertions is None or self.deletions is None
+
+
+@dataclass(frozen=True)
+class CommitDetail:
+    commit_hash: str
+    short_hash: str
+    authored_at: dt.datetime | None
+    author_name: str
+    author_email: str
+    subject: str
+    body: str
+    files: tuple[CommitFileChange, ...]
+
+    @property
+    def insertions(self) -> int:
+        return sum(change.insertions or 0 for change in self.files)
+
+    @property
+    def deletions(self) -> int:
+        return sum(change.deletions or 0 for change in self.files)
+
+
 def run_git(repo: Path, args: list[str]) -> str:
     git_executable = resolve_git_executable()
     result = subprocess.run(
@@ -298,6 +335,14 @@ def run_git(repo: Path, args: list[str]) -> str:
         stderr = result.stderr.strip()
         raise RuntimeError(f"git {' '.join(args)} failed: {stderr}")
     return result.stdout
+
+
+def list_branch_refs(repo: Path) -> tuple[str, ...]:
+    output = run_git(repo, ["for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes"])
+    return tuple(
+        ref for ref in output.splitlines()
+        if ref and not ref.endswith("/HEAD")
+    )
 
 
 def find_repo_root(start: Path) -> Path:
@@ -370,6 +415,34 @@ def _load_cache() -> None:
                 value = converted
             target[key] = value
 
+    def load_language_date_map(items: object) -> None:
+        if not isinstance(items, list):
+            return
+        for entry in items:
+            if not isinstance(entry, list) or len(entry) != 2:
+                continue
+            key_list, value = entry
+            if not isinstance(key_list, list) or not isinstance(value, dict):
+                continue
+            converted: dict[dt.date, dict[str, int]] = {}
+            for day_text, language_values in value.items():
+                if not isinstance(language_values, dict):
+                    continue
+                try:
+                    day = dt.date.fromisoformat(str(day_text))
+                except ValueError:
+                    continue
+                totals: dict[str, int] = {}
+                for language, line_count in language_values.items():
+                    try:
+                        parsed_count = int(line_count)
+                    except (TypeError, ValueError):
+                        continue
+                    if parsed_count > 0:
+                        totals[str(language)] = parsed_count
+                converted[day] = order_language_totals(totals)
+            _LANGUAGE_BY_DATE_CACHE[tuple(str(part) for part in key_list)] = converted
+
     with _CACHE_LOCK:
         load_map(data.get("committed"), _COMMITTED_INSERTIONS_CACHE)
         load_map(data.get("committed_deletions"), _COMMITTED_DELETIONS_CACHE)
@@ -380,6 +453,7 @@ def _load_cache() -> None:
         load_map(data.get("commit_counts"), _COMMIT_COUNT_CACHE)
         load_map(data.get("active_commit_dates"), _ACTIVE_COMMIT_DATES_CACHE)
         load_map(data.get("language_insertions"), _LANGUAGE_INSERTIONS_CACHE)
+        load_language_date_map(data.get("language_by_date"))
         load_map(data.get("by_date"), _BY_DATE_CACHE, convert_dates=True)
         load_map(data.get("deletions_by_date"), _DELETIONS_BY_DATE_CACHE, convert_dates=True)
         load_map(data.get("commits_by_date"), _COMMITS_BY_DATE_CACHE, convert_dates=True)
@@ -400,6 +474,7 @@ def _save_cache() -> None:
         "commit_counts": [],
         "active_commit_dates": [],
         "language_insertions": [],
+        "language_by_date": [],
         "by_date": [],
         "deletions_by_date": [],
         "commits_by_date": [],
@@ -423,6 +498,16 @@ def _save_cache() -> None:
             payload["active_commit_dates"].append([list(key), list(value)])
         for key, value in _LANGUAGE_INSERTIONS_CACHE.items():
             payload["language_insertions"].append([list(key), value])
+        for key, value in _LANGUAGE_BY_DATE_CACHE.items():
+            payload["language_by_date"].append(
+                [
+                    list(key),
+                    {
+                        day.isoformat(): dict(language_values)
+                        for day, language_values in value.items()
+                    },
+                ]
+            )
         for key, value in _BY_DATE_CACHE.items():
             payload["by_date"].append(
                 [list(key), {day.isoformat(): val for day, val in value.items()}]
@@ -465,6 +550,7 @@ def clear_cache_for_repo(repo: Path) -> None:
         clear_dict(_COMMIT_COUNT_CACHE)
         clear_dict(_ACTIVE_COMMIT_DATES_CACHE)
         clear_dict(_LANGUAGE_INSERTIONS_CACHE)
+        clear_dict(_LANGUAGE_BY_DATE_CACHE)
         clear_dict(_BY_DATE_CACHE)
         clear_dict(_DELETIONS_BY_DATE_CACHE)
         clear_dict(_COMMITS_BY_DATE_CACHE)
@@ -686,6 +772,34 @@ def parse_numstat_insertions_by_language(text: str) -> dict[str, int]:
     return order_language_totals(totals)
 
 
+def parse_numstat_insertions_by_date_and_language(
+    text: str,
+) -> dict[dt.date, dict[str, int]]:
+    daily: dict[dt.date, dict[str, int]] = {}
+    current_day: dt.date | None = None
+    for line in text.splitlines():
+        if line.startswith("@@DATE@@"):
+            try:
+                current_day = dt.date.fromisoformat(line.removeprefix("@@DATE@@").strip())
+            except ValueError:
+                current_day = None
+            if current_day is not None:
+                daily.setdefault(current_day, {})
+            continue
+        if current_day is None:
+            continue
+        parts = line.split("\t", 2)
+        if len(parts) < 3 or not parts[0].isdigit():
+            continue
+        path_text = parts[2].strip()
+        if not path_text or is_probably_binary_path(path_text):
+            continue
+        language = classify_text_language(path_text)
+        totals = daily.setdefault(current_day, {})
+        totals[language] = totals.get(language, 0) + int(parts[0])
+    return {day: order_language_totals(totals) for day, totals in daily.items()}
+
+
 def get_committed_insertions_by_language(
     repo: Path,
     author: str,
@@ -863,6 +977,54 @@ def get_commit_change_entries(
 
     flush_current()
     return entries[:limit]
+
+
+def get_commit_detail(repo: Path, commit_hash: str) -> CommitDetail:
+    metadata = run_git(
+        repo,
+        [
+            "show",
+            "-s",
+            "--date=iso-strict",
+            "--format=%H%x00%h%x00%aI%x00%an%x00%ae%x00%s%x00%b",
+            commit_hash,
+        ],
+    ).rstrip("\r\n")
+    fields = metadata.split("\x00", 6)
+    if len(fields) != 7:
+        raise RuntimeError("Git returned malformed commit metadata.")
+
+    authored_at: dt.datetime | None = None
+    try:
+        authored_at = dt.datetime.fromisoformat(fields[2].strip())
+    except ValueError:
+        pass
+
+    numstat = run_git(repo, ["show", "--numstat", "--format=", "--no-renames", commit_hash, "--"])
+    files: list[CommitFileChange] = []
+    for line in numstat.splitlines():
+        parts = line.split("\t", 2)
+        if len(parts) != 3:
+            continue
+        raw_insertions, raw_deletions, path = parts
+        files.append(
+            CommitFileChange(
+                path=path,
+                insertions=int(raw_insertions) if raw_insertions.isdigit() else None,
+                deletions=int(raw_deletions) if raw_deletions.isdigit() else None,
+            )
+        )
+
+    return CommitDetail(
+        commit_hash=fields[0].strip(),
+        short_hash=fields[1].strip(),
+        authored_at=authored_at,
+        author_name=fields[3].strip(),
+        author_email=fields[4].strip(),
+        subject=fields[5].strip(),
+        body=fields[6].strip(),
+        files=tuple(files),
+    )
 
 
 def _populate_total_up_to_stats(repo: Path, ref: str, author: str) -> tuple[int, int]:
@@ -1296,14 +1458,14 @@ def get_committed_insertions_for_date(
     return value
 
 
-def get_committed_insertions_by_date(
+def get_committed_insertions_by_date_and_language(
     repo: Path,
     start_day: dt.date,
     end_day: dt.date,
     author: str,
     ref: str = "HEAD",
     exclude_ref: str | None = None,
-) -> dict[dt.date, int]:
+) -> dict[dt.date, dict[str, int]]:
     _load_cache()
     if end_day < start_day:
         return {}
@@ -1321,25 +1483,37 @@ def get_committed_insertions_by_date(
         exclude_hash,
     )
     with _CACHE_LOCK:
-        cached = _BY_DATE_CACHE.get(cache_key)
+        cached = _LANGUAGE_BY_DATE_CACHE.get(cache_key)
     if cached is not None:
-        return dict(cached)
+        return {day: dict(totals) for day, totals in cached.items()}
 
     author_patterns = decode_author_patterns(author)
     if len(author_patterns) > 1:
-        merged: dict[dt.date, int] = {}
+        merged: dict[dt.date, dict[str, int]] = {}
         for pattern in author_patterns:
-            daily = get_committed_insertions_by_date(repo, start_day, end_day, pattern, ref, exclude_ref)
-            for day, value in daily.items():
-                merged[day] = merged.get(day, 0) + value
+            daily = get_committed_insertions_by_date_and_language(
+                repo,
+                start_day,
+                end_day,
+                pattern,
+                ref,
+                exclude_ref,
+            )
+            for day, totals in daily.items():
+                merged[day] = merge_language_totals(merged.get(day, {}), totals)
         with _CACHE_LOCK:
-            _BY_DATE_CACHE[cache_key] = dict(merged)
+            _LANGUAGE_BY_DATE_CACHE[cache_key] = {
+                day: dict(totals) for day, totals in merged.items()
+            }
+            _BY_DATE_CACHE[cache_key] = {
+                day: sum(totals.values()) for day, totals in merged.items()
+            }
             _mark_cache_dirty()
         return merged
 
     repo_key = _repo_key(repo)
     with _CACHE_LOCK:
-        for key, value in _BY_DATE_CACHE.items():
+        for key, value in _LANGUAGE_BY_DATE_CACHE.items():
             if len(key) != 8:
                 continue
             if (
@@ -1357,10 +1531,19 @@ def get_committed_insertions_by_date(
             except ValueError:
                 continue
             if cached_start <= start_day and cached_end >= end_day:
-                sliced = {day: val for day, val in value.items() if start_day <= day <= end_day}
-                _BY_DATE_CACHE[cache_key] = dict(sliced)
+                sliced = {
+                    day: dict(totals)
+                    for day, totals in value.items()
+                    if start_day <= day <= end_day
+                }
+                _LANGUAGE_BY_DATE_CACHE[cache_key] = {
+                    day: dict(totals) for day, totals in sliced.items()
+                }
+                _BY_DATE_CACHE[cache_key] = {
+                    day: sum(totals.values()) for day, totals in sliced.items()
+                }
                 _mark_cache_dirty()
-                return dict(sliced)
+                return sliced
 
     until_day = end_day + dt.timedelta(days=1)
     author_pattern = author_patterns[0] if author_patterns else ""
@@ -1381,34 +1564,36 @@ def get_committed_insertions_by_date(
     if exclude_ref:
         args.extend(["--not", exclude_ref])
 
-    out = run_git(repo, args)
-    daily: dict[dt.date, int] = {}
-    current_day: dt.date | None = None
-
-    for line in out.splitlines():
-        if line.startswith("@@DATE@@"):
-            date_text = line.replace("@@DATE@@", "", 1).strip()
-            try:
-                current_day = dt.date.fromisoformat(date_text)
-            except ValueError:
-                current_day = None
-            if current_day is not None and current_day not in daily:
-                daily[current_day] = 0
-            continue
-
-        if current_day is None:
-            continue
-
-        parts = line.split("\t")
-        if len(parts) < 3:
-            continue
-        if parts[0].isdigit():
-            daily[current_day] = daily.get(current_day, 0) + int(parts[0])
+    daily = parse_numstat_insertions_by_date_and_language(run_git(repo, args))
 
     with _CACHE_LOCK:
-        _BY_DATE_CACHE[cache_key] = dict(daily)
+        _LANGUAGE_BY_DATE_CACHE[cache_key] = {
+            day: dict(totals) for day, totals in daily.items()
+        }
+        _BY_DATE_CACHE[cache_key] = {
+            day: sum(totals.values()) for day, totals in daily.items()
+        }
         _mark_cache_dirty()
     return daily
+
+
+def get_committed_insertions_by_date(
+    repo: Path,
+    start_day: dt.date,
+    end_day: dt.date,
+    author: str,
+    ref: str = "HEAD",
+    exclude_ref: str | None = None,
+) -> dict[dt.date, int]:
+    daily = get_committed_insertions_by_date_and_language(
+        repo,
+        start_day,
+        end_day,
+        author,
+        ref,
+        exclude_ref,
+    )
+    return {day: sum(totals.values()) for day, totals in daily.items()}
 
 
 def _get_commit_active_dates(
@@ -1628,6 +1813,40 @@ def get_committed_insertions_by_date_combined(
     merged = dict(base)
     for day, value in extra.items():
         merged[day] = merged.get(day, 0) + value
+    return merged
+
+
+def get_committed_insertions_by_date_and_language_combined(
+    repo: Path,
+    start_day: dt.date,
+    end_day: dt.date,
+    author: str,
+    ref: str,
+    include_local: bool,
+) -> dict[dt.date, dict[str, int]]:
+    base = get_committed_insertions_by_date_and_language(
+        repo,
+        start_day,
+        end_day,
+        author,
+        ref,
+    )
+    if not include_local:
+        return base
+    current_ref = resolve_current_ref(repo)
+    if current_ref == ref:
+        return base
+    extra = get_committed_insertions_by_date_and_language(
+        repo,
+        start_day,
+        end_day,
+        author,
+        current_ref,
+        exclude_ref=ref,
+    )
+    merged = {day: dict(totals) for day, totals in base.items()}
+    for day, totals in extra.items():
+        merged[day] = merge_language_totals(merged.get(day, {}), totals)
     return merged
 
 

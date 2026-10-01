@@ -16,9 +16,11 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
 from hidden_desktop import close_hidden_desktop, create_hidden_desktop
+from line_tracker import list_branch_refs, resolve_current_ref
 from line_tracker_args import make_ui_parser
 from line_tracker_theme import get_theme_palette, resolve_theme_name
 from qt_app.main_window import LineTrackerQtWindow
+from qt_app.schedule_item_dialog import ScheduleItemDialog
 from qt_app.settings_dialog import SettingsDialog
 from qt_app.theme import build_theme_tokens
 
@@ -26,6 +28,9 @@ from qt_app.theme import build_theme_tokens
 CAPTURE_SURFACES = (
     "activity",
     "schedule",
+    "schedule-open",
+    "schedule-done",
+    "schedule-edit",
     "grass",
     "history",
     "settings",
@@ -49,6 +54,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--theme")
     parser.add_argument("--lang", choices=("ko", "en"))
     parser.add_argument("--graph-series", choices=("additions", "lines", "commits", "all"))
+    parser.add_argument("--stats-tab", choices=("overall", "user", "branch"), default="overall")
     return parser.parse_args()
 
 
@@ -102,6 +108,7 @@ def main() -> int:
                 return
             if not prepared:
                 prepared = True
+                window.stats_tab_buttons[args.stats_tab].click()
                 target = _prepare_surface(window, args.surface)
                 capture_target.append(target)
                 QTimer.singleShot(250, capture_when_ready)
@@ -113,16 +120,15 @@ def main() -> int:
                 history_settled = True
                 QTimer.singleShot(500, capture_when_ready)
                 return
-            else:
-                try:
-                    args.output.parent.mkdir(parents=True, exist_ok=True)
-                    target = capture_target[0]
-                    image = target.grab()
-                    if not image.save(str(args.output.resolve())):
-                        raise OSError(f"Failed to save capture: {args.output.resolve()}")
-                    result["size"] = (image.width(), image.height())
-                except Exception as exc:
-                    result["error"] = exc
+            try:
+                args.output.parent.mkdir(parents=True, exist_ok=True)
+                target = capture_target[0]
+                image = target.grab()
+                if not image.save(str(args.output.resolve())):
+                    raise OSError(f"Failed to save capture: {args.output.resolve()}")
+                result["size"] = (image.width(), image.height())
+            except Exception as exc:
+                result["error"] = exc
             window.close()
             app.quit()
 
@@ -143,8 +149,24 @@ def _prepare_surface(window: LineTrackerQtWindow, surface: str):
     if surface == "activity":
         window.workspace_tabs.setCurrentIndex(0)
         return window
-    if surface == "schedule":
+    if surface in {"schedule", "schedule-open", "schedule-done", "schedule-edit"}:
         window.workspace_tabs.setCurrentIndex(0)
+        if surface == "schedule-open":
+            window.schedule_view.summary_values["active"].click()
+        elif surface == "schedule-done":
+            window.schedule_view.summary_values["done"].click()
+        elif surface == "schedule-edit":
+            document = window.schedule_view.document
+            if document is None or not document.items:
+                raise RuntimeError("Schedule edit capture requires a loaded schedule item.")
+            dialog = ScheduleItemDialog(
+                window,
+                item=document.items[0],
+                translate=window.t,
+                tokens=window.tokens,
+            )
+            dialog.show()
+            return dialog
         return window
     if surface == "grass":
         window.workspace_tabs.setCurrentIndex(1)
@@ -161,6 +183,9 @@ def _prepare_surface(window: LineTrackerQtWindow, surface: str):
             author_options=options,
             author_filter_map=mapping,
             author_display=window._author_display(mapping, aliases),
+            language_order=window._language_color_order(),
+            branch_options=list_branch_refs(window.repo) if window.repo_selected else (),
+            current_branch=resolve_current_ref(window.repo) if window.repo_selected else "",
         )
         settings_tabs = {
             "settings": 0,

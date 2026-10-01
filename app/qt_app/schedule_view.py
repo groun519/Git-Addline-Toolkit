@@ -24,14 +24,17 @@ from line_tracker_schedule import (
     ScheduleDocument,
     ScheduleItem,
 )
-from qt_app.theme import QtThemeTokens
-from qt_app.widgets import IconButton
+from qt_app.theme import PANEL_PADDING, PANEL_SPACING, QtThemeTokens
+from qt_app.widgets import ExpandableText, IconButton
 
 
 class ScheduleView(QWidget):
     select_requested = Signal()
     reload_requested = Signal()
     location_requested = Signal()
+    edit_requested = Signal(object)
+    delete_requested = Signal(object)
+    complete_requested = Signal(object)
 
     def __init__(self, translate) -> None:
         super().__init__()
@@ -42,20 +45,21 @@ class ScheduleView(QWidget):
         self.source_path: Path | None = None
         self.state = "unconfigured"
         self.error_message = ""
+        self.filter_mode = "total"
         self._build_ui()
         self.show_unconfigured()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(9)
+        layout.setContentsMargins(PANEL_PADDING, PANEL_PADDING, PANEL_PADDING, PANEL_PADDING)
+        layout.setSpacing(PANEL_SPACING)
 
         header = QHBoxLayout()
         header.setSpacing(7)
         titles = QVBoxLayout()
         titles.setSpacing(1)
         self.title_label = QLabel(self.t("schedule_title"))
-        self.title_label.setObjectName("SectionTitle")
+        self.title_label.setObjectName("PanelTitle")
         self.source_label = QLabel()
         self.source_label.setObjectName("MutedLabel")
         titles.addWidget(self.title_label)
@@ -76,13 +80,16 @@ class ScheduleView(QWidget):
         self.summary.setObjectName("SummaryStrip")
         summary_layout = QHBoxLayout(self.summary)
         summary_layout.setContentsMargins(10, 6, 10, 6)
-        summary_layout.setSpacing(18)
-        self.summary_values: dict[str, QLabel] = {}
+        summary_layout.setSpacing(4)
+        self.summary_values: dict[str, QPushButton] = {}
         for name in ("total", "active", "done"):
-            label = QLabel()
-            label.setObjectName("SummaryMetric")
-            self.summary_values[name] = label
-            summary_layout.addWidget(label)
+            button = QPushButton()
+            button.setObjectName("ScheduleFilterButton")
+            button.setCheckable(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.clicked.connect(lambda _checked=False, mode=name: self._set_filter(mode))
+            self.summary_values[name] = button
+            summary_layout.addWidget(button)
         summary_layout.addStretch(1)
         layout.addWidget(self.summary)
 
@@ -92,7 +99,7 @@ class ScheduleView(QWidget):
         self.list_host = QWidget()
         self.list_layout = QVBoxLayout(self.list_host)
         self.list_layout.setContentsMargins(0, 0, 5, 0)
-        self.list_layout.setSpacing(7)
+        self.list_layout.setSpacing(6)
         self.scroll.setWidget(self.list_host)
         layout.addWidget(self.scroll, 1)
 
@@ -160,7 +167,11 @@ class ScheduleView(QWidget):
         if not document.items:
             self._add_empty_state(self.t("schedule_empty_title"), self.t("schedule_empty_hint"))
             return
-        for group_label, items in self._group_items(document.items):
+        visible_items = self._filtered_items(document.items)
+        if not visible_items:
+            self._add_empty_state(self.t("schedule_filter_empty_title"), self.t("schedule_filter_empty_hint"))
+            return
+        for group_label, items in self._group_items(visible_items):
             group = QLabel(group_label)
             group.setObjectName("ScheduleGroup")
             self.list_layout.addWidget(group)
@@ -207,7 +218,7 @@ class ScheduleView(QWidget):
         card = QFrame()
         card.setObjectName("ScheduleCard")
         layout = QHBoxLayout(card)
-        layout.setContentsMargins(10, 9, 10, 9)
+        layout.setContentsMargins(10, 8, 10, 8)
         layout.setSpacing(10)
         accent = QFrame()
         accent.setFixedWidth(4)
@@ -229,17 +240,65 @@ class ScheduleView(QWidget):
         meta.setObjectName("MutedLabel")
         content.addWidget(meta)
         if item.description:
-            description = QLabel(item.description)
-            description.setObjectName("MutedLabel")
-            description.setWordWrap(True)
+            description = ExpandableText(
+                item.description,
+                expand_text=self.t("schedule_expand"),
+                collapse_text=self.t("schedule_collapse"),
+                collapsed_lines=3,
+            )
             content.addWidget(description)
         layout.addLayout(content, 1)
+        side = QVBoxLayout()
+        side.setContentsMargins(0, 0, 0, 0)
+        side.setSpacing(5)
         status = QLabel(self.t(status_key))
         status.setObjectName("ScheduleStatus")
         status.setStyleSheet(f"color: {status_color};")
         status.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight)
-        layout.addWidget(status)
+        side.addWidget(status, 0, Qt.AlignmentFlag.AlignRight)
+        actions = QHBoxLayout()
+        actions.setContentsMargins(0, 0, 0, 0)
+        actions.setSpacing(2)
+        edit_button = IconButton("edit", self.t("schedule_edit"), size=24)
+        edit_button.setObjectName("ScheduleCardAction")
+        delete_button = IconButton("trash", self.t("schedule_delete"), size=24)
+        delete_button.setObjectName("ScheduleCardAction")
+        if self.tokens is not None:
+            edit_button.set_icon_color(self.tokens.muted)
+            delete_button.set_icon_color(self.tokens.danger)
+        if not item.is_done:
+            complete_button = IconButton("check", self.t("schedule_complete"), size=24)
+            complete_button.setObjectName("ScheduleCardAction")
+            if self.tokens is not None:
+                complete_button.set_icon_color(self.tokens.success)
+            complete_button.clicked.connect(
+                lambda _checked=False, selected=item: self.complete_requested.emit(selected)
+            )
+            actions.addWidget(complete_button)
+        edit_button.clicked.connect(lambda _checked=False, selected=item: self.edit_requested.emit(selected))
+        delete_button.clicked.connect(lambda _checked=False, selected=item: self.delete_requested.emit(selected))
+        actions.addWidget(edit_button)
+        actions.addWidget(delete_button)
+        side.addLayout(actions)
+        side.addStretch(1)
+        layout.addLayout(side)
         return card
+
+    def _filtered_items(self, items: tuple[ScheduleItem, ...]) -> tuple[ScheduleItem, ...]:
+        if self.filter_mode == "active":
+            return tuple(item for item in items if not item.is_done)
+        if self.filter_mode == "done":
+            return tuple(item for item in items if item.is_done)
+        return items
+
+    def _set_filter(self, mode: str) -> None:
+        if mode not in self.summary_values:
+            return
+        self.filter_mode = mode
+        for name, button in self.summary_values.items():
+            button.setChecked(name == mode)
+        if self.state == "loaded":
+            self.refresh()
 
     def _group_items(self, items: tuple[ScheduleItem, ...]) -> list[tuple[str, list[ScheduleItem]]]:
         active_by_date: dict[dt.date, list[ScheduleItem]] = defaultdict(list)
@@ -295,3 +354,4 @@ class ScheduleView(QWidget):
     def _set_summary(self, total: int, active: int, done: int) -> None:
         for name, value in (("total", total), ("active", active), ("done", done)):
             self.summary_values[name].setText(f"{self.t(f'schedule_summary_{name}')}  {value:,}")
+            self.summary_values[name].setChecked(name == self.filter_mode)

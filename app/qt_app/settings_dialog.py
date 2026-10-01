@@ -11,10 +11,12 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSlider,
     QSpinBox,
     QTabWidget,
@@ -22,12 +24,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from line_tracker import LANGUAGE_NAMES
 from line_tracker_settings import UISettings
 from line_tracker_theme import get_theme_names
 from line_tracker_ui_resources import LANG_DISPLAY, LANG_OPTIONS
 from line_tracker_version import APP_VERSION
 from qt_app.theme import QtThemeTokens
-from qt_app.widgets import IconButton, ThemedComboBox, ThemedDateEdit, WindowTitleBar
+from qt_app.widgets import IconButton, ThemedComboBox, ThemedDateEdit, WindowTitleBar, language_color
 
 
 GRAPH_DAY_OPTIONS = ("7", "14", "21", "30", "60", "90", "180")
@@ -48,8 +51,10 @@ class SettingsValues:
     graph_show_additions: bool
     graph_show_deletions: bool
     graph_show_commits: bool
+    graph_languages: tuple[str, ...]
     graph_curve: float
     schedule_path: str
+    selected_branches: tuple[str, ...] = ()
 
 
 class SettingsDialog(QDialog):
@@ -63,12 +68,19 @@ class SettingsDialog(QDialog):
         author_options: list[str],
         author_filter_map: dict[str, str],
         author_display: str,
+        language_order: tuple[str, ...] | None = None,
+        branch_options: tuple[str, ...] = (),
+        current_branch: str = "",
     ) -> None:
         super().__init__(parent)
         self.t = translate
         self.settings = settings
         self.tokens = tokens
         self.author_filter_map = author_filter_map
+        self.language_order = language_order
+        self.branch_options = branch_options
+        self.current_branch = current_branch
+        self.restart_requested = False
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
         self.setModal(True)
         self.setMinimumSize(620, 500)
@@ -94,6 +106,9 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(self._build_schedule_tab(), self.t("settings_schedule_tab"))
         content_layout.addWidget(self.tabs, 1)
         actions = QHBoxLayout()
+        self.restart_button = QPushButton(self.t("restart_app"))
+        self.restart_button.clicked.connect(self._accept_restart)
+        actions.addWidget(self.restart_button)
         actions.addStretch(1)
         cancel = QPushButton(self.t("cancel") if self.t("cancel") != "cancel" else "Cancel")
         cancel.clicked.connect(self.reject)
@@ -169,6 +184,27 @@ class SettingsDialog(QDialog):
         form.addRow(self.t("today_label"), self.date_edit)
         form.addRow(self.t("goal_label"), self.goal_spin)
         form.addRow(self.t("author_label"), self.author_combo)
+        branch_list = QWidget()
+        branch_layout = QVBoxLayout(branch_list)
+        branch_layout.setContentsMargins(4, 4, 4, 4)
+        branch_layout.setSpacing(5)
+        selected = set(self.settings.selected_branches or (self.current_branch,))
+        self.branch_checks: dict[str, QCheckBox] = {}
+        for branch in self.branch_options:
+            checkbox = QCheckBox(branch)
+            checkbox.setChecked(branch in selected)
+            branch_layout.addWidget(checkbox)
+            self.branch_checks[branch] = checkbox
+        branch_layout.addStretch(1)
+        branch_scroll = QScrollArea()
+        branch_scroll.setWidgetResizable(True)
+        branch_scroll.setWidget(branch_list)
+        branch_scroll.setFixedHeight(118)
+        form.addRow(self.t("selected_branches_label"), branch_scroll)
+        branch_hint = QLabel(self.t("selected_branches_hint"))
+        branch_hint.setObjectName("MutedLabel")
+        branch_hint.setWordWrap(True)
+        form.addRow("", branch_hint)
         form.addRow("", self.auto_refresh)
         return tab
 
@@ -187,6 +223,19 @@ class SettingsDialog(QDialog):
         flags.addWidget(self.graph_additions)
         flags.addWidget(self.graph_deletions)
         flags.addWidget(self.graph_commits)
+        languages = QGridLayout()
+        languages.setHorizontalSpacing(16)
+        languages.setVerticalSpacing(8)
+        selected_languages = set(self.settings.graph_languages)
+        self.graph_language_checks: dict[str, QCheckBox] = {}
+        for index, language in enumerate(LANGUAGE_NAMES):
+            checkbox = QCheckBox(language)
+            checkbox.setChecked(language in selected_languages)
+            checkbox.setStyleSheet(
+                f"QCheckBox {{ color: {language_color(language, self.language_order)}; }}"
+            )
+            languages.addWidget(checkbox, index // 3, index % 3)
+            self.graph_language_checks[language] = checkbox
         curve_row = QHBoxLayout()
         self.graph_curve = QSlider(Qt.Orientation.Horizontal)
         self.graph_curve.setRange(0, 100)
@@ -197,6 +246,7 @@ class SettingsDialog(QDialog):
         curve_row.addWidget(self.graph_curve_value)
         form.addRow(self.t("graph_period"), self.graph_days)
         form.addRow(self.t("graph_metrics"), flags)
+        form.addRow(self.t("graph_languages"), languages)
         form.addRow(self.t("graph_curve"), curve_row)
         return tab
 
@@ -220,6 +270,11 @@ class SettingsDialog(QDialog):
         theme_index = max(0, self.theme_combo.currentIndex())
         date_value = self.date_edit.date().toPython()
         author_display = self.author_combo.currentText()
+        selected_branches = tuple(
+            branch for branch, checkbox in self.branch_checks.items() if checkbox.isChecked()
+        )
+        if selected_branches == (self.current_branch,):
+            selected_branches = ()
         return SettingsValues(
             lang=LANG_OPTIONS.get(self.lang_combo.currentText(), "ko"),
             theme=self.theme_names[theme_index],
@@ -234,8 +289,14 @@ class SettingsDialog(QDialog):
             graph_show_additions=self.graph_additions.isChecked(),
             graph_show_deletions=self.graph_deletions.isChecked(),
             graph_show_commits=self.graph_commits.isChecked(),
+            graph_languages=tuple(
+                language
+                for language in LANGUAGE_NAMES
+                if self.graph_language_checks[language].isChecked()
+            ),
             graph_curve=float(self.graph_curve.value()),
             schedule_path=self.schedule_edit.text().strip(),
+            selected_branches=selected_branches,
         )
 
     def _browse_repo(self) -> None:
@@ -252,6 +313,10 @@ class SettingsDialog(QDialog):
         )
         if selected:
             self.schedule_edit.setText(selected)
+
+    def _accept_restart(self) -> None:
+        self.restart_requested = True
+        self.accept()
 
     def _combo(self) -> ThemedComboBox:
         combo = ThemedComboBox()

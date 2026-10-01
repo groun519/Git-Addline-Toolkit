@@ -18,6 +18,9 @@ _ICON_BODY = {
     "grass": '<rect x="4" y="5" width="4" height="4"/><rect x="10" y="5" width="4" height="4"/><rect x="16" y="5" width="4" height="4"/><rect x="4" y="11" width="4" height="4"/><rect x="10" y="11" width="4" height="4"/><rect x="16" y="11" width="4" height="4"/><rect x="4" y="17" width="4" height="4"/><rect x="10" y="17" width="4" height="4"/>',
     "overlay": '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 9h10M7 13h6"/>',
     "history": '<path d="M4 12a8 8 0 1 0 2.3-5.7L4 8.6"/><path d="M4 4v4.6h4.6M12 8v5l3 2"/>',
+    "edit": '<path d="M4 20h4l11-11-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>',
+    "trash": '<path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/>',
+    "check": '<path d="m5 12 4 4L19 6"/>',
 }
 
 

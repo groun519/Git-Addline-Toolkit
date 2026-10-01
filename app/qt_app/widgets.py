@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QComboBox,
@@ -18,9 +18,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from line_tracker import LANGUAGE_NAMES
 from line_tracker_presenters import StatSectionPresentation
 from qt_app.icons import make_icon
-from qt_app.theme import QtThemeTokens
+from qt_app.theme import STAT_CARD_MIN_HEIGHT, QtThemeTokens
 
 
 LANGUAGE_COLORS = (
@@ -33,6 +34,30 @@ LANGUAGE_COLORS = (
     "#c89570",
     "#8eb56f",
 )
+
+
+def complete_language_order(languages: object) -> tuple[str, ...]:
+    ordered: list[str] = []
+    if isinstance(languages, dict):
+        candidates = languages.keys()
+    elif isinstance(languages, (list, tuple)):
+        candidates = languages
+    else:
+        candidates = ()
+    for language in (*candidates, *LANGUAGE_NAMES):
+        language_text = str(language)
+        if language_text not in ordered:
+            ordered.append(language_text)
+    return tuple(ordered)
+
+
+def language_color(language: str, language_order: tuple[str, ...] | None = None) -> str:
+    order = language_order or LANGUAGE_NAMES
+    try:
+        index = order.index(language)
+    except ValueError:
+        index = len(order)
+    return LANGUAGE_COLORS[index % len(LANGUAGE_COLORS)]
 
 
 class IconButton(QPushButton):
@@ -50,6 +75,93 @@ class IconButton(QPushButton):
     def set_icon_color(self, color: str) -> None:
         self._icon_color = color
         self.setIcon(make_icon(self._icon_name, color, max(16, int(self.width() * 0.56))))
+
+
+class ElidedLabel(QLabel):
+    def __init__(self, text: str = "") -> None:
+        super().__init__()
+        self._full_text = text
+        self.setToolTip(text)
+        self.setMinimumWidth(24)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self._update_elided_text()
+
+    def set_full_text(self, text: str) -> None:
+        self._full_text = text
+        self.setToolTip(text)
+        self._update_elided_text()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        self._update_elided_text()
+        super().resizeEvent(event)
+
+    def _update_elided_text(self) -> None:
+        available = max(0, self.width() - 2)
+        super().setText(self.fontMetrics().elidedText(self._full_text, Qt.TextElideMode.ElideRight, available))
+
+
+class ExpandableText(QWidget):
+    def __init__(
+        self,
+        text: str,
+        *,
+        expand_text: str,
+        collapse_text: str,
+        collapsed_lines: int = 3,
+    ) -> None:
+        super().__init__()
+        self._text = text
+        self._expand_text = expand_text
+        self._collapse_text = collapse_text
+        self._collapsed_lines = max(1, collapsed_lines)
+        self._expanded = False
+
+        self.label = QLabel(text)
+        self.label.setObjectName("ExpandableTextLabel")
+        self.label.setWordWrap(True)
+        self.label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.toggle_button = QPushButton(expand_text)
+        self.toggle_button.setObjectName("InlineButton")
+        self.toggle_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.toggle_button.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        self.toggle_button.clicked.connect(self.toggle)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+        layout.addWidget(self.label)
+        layout.addWidget(self.toggle_button, 0, Qt.AlignmentFlag.AlignLeft)
+        self._update_layout()
+
+    @property
+    def expanded(self) -> bool:
+        return self._expanded
+
+    def toggle(self) -> None:
+        self._expanded = not self._expanded
+        self._update_layout()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._update_layout()
+
+    def _update_layout(self) -> None:
+        line_height = self.label.fontMetrics().lineSpacing()
+        collapsed_height = line_height * self._collapsed_lines
+        available_width = max(1, self.label.width())
+        full_height = self.label.fontMetrics().boundingRect(
+            QRect(0, 0, available_width, 100_000),
+            Qt.TextFlag.TextWordWrap,
+            self._text,
+        ).height()
+        overflow = full_height > collapsed_height
+        self.toggle_button.setVisible(overflow)
+        if not overflow:
+            self._expanded = False
+        self.label.setMaximumHeight(16_777_215 if self._expanded or not overflow else collapsed_height)
+        self.toggle_button.setText(self._collapse_text if self._expanded else self._expand_text)
+        self.label.updateGeometry()
+        self.updateGeometry()
 
 
 class ThemedComboBox(QComboBox):
@@ -152,6 +264,7 @@ class StatCard(QFrame):
     def __init__(self, accent_color: str) -> None:
         super().__init__()
         self.setObjectName("StatCard")
+        self.setMinimumHeight(STAT_CARD_MIN_HEIGHT)
         self.accent = QFrame()
         self.accent.setObjectName("StatAccent")
         self.accent.setFixedWidth(4)
@@ -182,7 +295,7 @@ class StatCard(QFrame):
 class StatsSection(QWidget):
     def __init__(self, accent_colors: tuple[str, str]) -> None:
         super().__init__()
-        self.title = QLabel()
+        self.title = ElidedLabel()
         self.title.setObjectName("SectionTitle")
         self.added = QLabel()
         self.added.setObjectName("DeltaAdd")
@@ -190,41 +303,84 @@ class StatsSection(QWidget):
         self.removed.setObjectName("DeltaRemove")
         self.commits = QLabel()
         self.commits.setObjectName("CommitCount")
-        self.cards = (StatCard(accent_colors[0]), StatCard(accent_colors[1]))
+        self.scope = ElidedLabel()
+        self.scope.setObjectName("MutedLabel")
+        self.cards = (
+            StatCard(accent_colors[0]),
+            StatCard(accent_colors[1]),
+            StatCard(accent_colors[0]),
+            StatCard(accent_colors[1]),
+            StatCard(accent_colors[0]),
+        )
 
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
         header.setSpacing(9)
-        header.addWidget(self.title)
+        header.addWidget(self.title, 1)
         header.addWidget(self.added)
         header.addWidget(self.removed)
         header.addWidget(self.commits)
-        header.addStretch(1)
 
-        grid = QGridLayout()
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(8)
-        grid.addWidget(self.cards[0], 0, 0)
-        grid.addWidget(self.cards[1], 0, 1)
-        grid.setColumnStretch(0, 1)
-        grid.setColumnStretch(1, 1)
+        self.card_grid = QGridLayout()
+        self.card_grid.setContentsMargins(0, 0, 0, 0)
+        self.card_grid.setHorizontalSpacing(8)
+        self.card_grid.setVerticalSpacing(8)
+        self.card_grid.setColumnStretch(0, 1)
+        self.card_grid.setColumnStretch(1, 1)
+        self._arrange_cards(len(self.cards))
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
         layout.addLayout(header)
-        layout.addLayout(grid)
+        layout.addWidget(self.scope)
+        layout.addLayout(self.card_grid)
 
     def set_presentation(self, presentation: StatSectionPresentation) -> None:
-        self.title.setText(presentation.title)
+        self.title.set_full_text(presentation.title)
         self.added.setText(presentation.added)
         self.removed.setText(presentation.removed)
         self.commits.setText(presentation.commits)
+        self.scope.set_full_text(presentation.scope)
+        self.scope.setVisible(bool(presentation.scope))
         self.added.setVisible(bool(presentation.added))
         self.removed.setVisible(bool(presentation.removed))
         self.commits.setVisible(bool(presentation.commits))
-        for card, content in zip(self.cards, presentation.cards):
-            card.set_content(content.label, content.value)
+        self._arrange_cards(len(presentation.cards))
+        for index, card in enumerate(self.cards):
+            if index < len(presentation.cards):
+                content = presentation.cards[index]
+                card.set_content(content.label, content.value)
+                card.show()
+            else:
+                card.hide()
+
+    def _arrange_cards(self, count: int) -> None:
+        for card in self.cards:
+            self.card_grid.removeWidget(card)
+        if count <= 1:
+            positions = ((0, 0, 1, 2),)
+        elif count == 2:
+            positions = ((0, 0, 1, 1), (0, 1, 1, 1))
+        elif count == 3:
+            positions = ((0, 0, 1, 1), (0, 1, 1, 1), (1, 0, 1, 2))
+        elif count == 4:
+            positions = (
+                (0, 0, 1, 1),
+                (0, 1, 1, 1),
+                (1, 0, 1, 1),
+                (1, 1, 1, 1),
+            )
+        else:
+            positions = (
+                (0, 0, 1, 1),
+                (0, 1, 1, 1),
+                (1, 0, 1, 1),
+                (1, 1, 1, 1),
+                (2, 0, 1, 2),
+            )
+        for card, position in zip(self.cards, positions):
+            self.card_grid.addWidget(card, *position)
 
 
 class LanguageProgressBar(QWidget):

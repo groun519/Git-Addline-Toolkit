@@ -21,6 +21,7 @@ from line_tracker_schedule import (
     make_portable_schedule_path,
     resolve_schedule_path,
 )
+from line_tracker_schedule_editor import ScheduleDocumentEditor, ScheduleEditError
 
 
 class ScheduleTests(unittest.TestCase):
@@ -105,8 +106,100 @@ class ScheduleTests(unittest.TestCase):
             "Define the public contract\nVerify repository | service | UI | test boundaries",
         )
         self.assertEqual(document.items[-1].description, "Revisit after the core work")
+        self.assertEqual((document.items[0].source_start_line, document.items[0].source_end_line), (1, 4))
+        self.assertEqual((document.items[1].source_start_line, document.items[1].source_end_line), (5, 7))
         self.assertEqual(document.completed_count, 1)
         self.assertEqual(document.in_progress_count, 1)
+
+    def test_editor_updates_only_the_selected_item_block(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "work-plan.md"
+            path.write_text(
+                "# Work Plan\n\n@@DAY 2026-08-04\n"
+                "ITEM-001 | PLANNED | 10:00~11:00 | Keep\n- Original\n\n"
+                "ITEM-002 | IN_PROGRESS | - | Edit me\n- Old detail\n\n"
+                "## Completed\n| Commit | Scope |\n",
+                encoding="utf-8",
+            )
+            parser = DirectiveScheduleParser()
+            target = parser.parse(path.read_text(encoding="utf-8"), path).items[1]
+            replacement = type(target)(
+                item_id=target.item_id,
+                title="Edited in Line Tracker",
+                date=target.date,
+                description="First detail\nSecond detail",
+                status=SCHEDULE_STATUS_DONE,
+                time_range="12:00~13:00",
+            )
+
+            ScheduleDocumentEditor(parser).update_item(path, target, replacement)
+            updated = path.read_text(encoding="utf-8")
+
+        self.assertIn("ITEM-001 | PLANNED | 10:00~11:00 | Keep\n- Original", updated)
+        self.assertIn("ITEM-002 | DONE | 12:00~13:00 | Edited in Line Tracker", updated)
+        self.assertIn("- First detail\n- Second detail", updated)
+        self.assertIn("## Completed\n| Commit | Scope |", updated)
+
+    def test_editor_moves_item_to_another_day_without_rewriting_document(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "work-plan.md"
+            path.write_text(
+                "Preface\n\n@@DAY 2026-08-04\nITEM-001 | PLANNED | - | Move me\n"
+                "\n@@BACKLOG\nITEM-002 | HOLD | - | Existing\n",
+                encoding="utf-8-sig",
+            )
+            parser = DirectiveScheduleParser()
+            target = parser.parse(path.read_text(encoding="utf-8-sig"), path).items[0]
+            replacement = type(target)(
+                item_id=target.item_id,
+                title=target.title,
+                date=None,
+                description=target.description,
+                status=SCHEDULE_STATUS_NEXT,
+                time_range=target.time_range,
+            )
+
+            ScheduleDocumentEditor(parser).update_item(path, target, replacement)
+            raw = path.read_bytes()
+            updated = path.read_text(encoding="utf-8-sig")
+
+        self.assertTrue(raw.startswith(b"\xef\xbb\xbf"))
+        self.assertIn("Preface", updated)
+        self.assertEqual(updated.count("ITEM-001"), 1)
+        self.assertGreater(updated.index("ITEM-001 | NEXT"), updated.index("@@BACKLOG"))
+
+    def test_editor_deletes_only_the_selected_item(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "work-plan.md"
+            path.write_text(
+                "@@BACKLOG\nITEM-001 | PLANNED | - | Remove\n- Detail\n\n"
+                "ITEM-002 | PLANNED | - | Keep\n",
+                encoding="utf-8",
+            )
+            parser = DirectiveScheduleParser()
+            target = parser.parse(path.read_text(encoding="utf-8"), path).items[0]
+
+            ScheduleDocumentEditor(parser).delete_item(path, target)
+            updated = path.read_text(encoding="utf-8")
+
+        self.assertNotIn("ITEM-001", updated)
+        self.assertNotIn("- Detail", updated)
+        self.assertIn("ITEM-002 | PLANNED | - | Keep", updated)
+
+    def test_editor_rejects_an_item_changed_outside_the_app(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "work-plan.md"
+            path.write_text("@@BACKLOG\nITEM-001 | PLANNED | - | Original\n", encoding="utf-8")
+            parser = DirectiveScheduleParser()
+            target = parser.parse(path.read_text(encoding="utf-8"), path).items[0]
+            path.write_text("@@BACKLOG\nITEM-001 | PLANNED | - | External edit\n", encoding="utf-8")
+
+            with self.assertRaises(ScheduleEditError):
+                ScheduleDocumentEditor(parser).delete_item(path, target)
+
+            updated = path.read_text(encoding="utf-8")
+
+        self.assertIn("External edit", updated)
 
     def test_parser_reports_invalid_content_with_line_number(self) -> None:
         parser = DirectiveScheduleParser()

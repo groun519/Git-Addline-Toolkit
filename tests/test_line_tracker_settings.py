@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 import sys
 from unittest.mock import Mock, patch
@@ -10,6 +11,7 @@ if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
 from line_tracker import encode_author_patterns
+from line_tracker_settings import classify_settings_change
 from line_tracker_ui import LineTrackerApp, UISettings
 
 
@@ -46,6 +48,22 @@ class _FakeScheduleLocationApp:
 
 
 class SettingsTests(unittest.TestCase):
+    def test_classify_settings_change_keeps_all_graph_controls_local(self) -> None:
+        settings = UISettings(repo_path="C:/repo")
+
+        self.assertEqual(
+            classify_settings_change(settings, replace(settings, graph_curve=70.0)),
+            "graph_render",
+        )
+        self.assertEqual(
+            classify_settings_change(settings, replace(settings, graph_days="30")),
+            "graph_render",
+        )
+        self.assertEqual(
+            classify_settings_change(settings, replace(settings, theme="dark")),
+            "application",
+        )
+
     def test_open_schedule_location_opens_selected_file_parent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             repo = Path(tmp_dir)
@@ -125,6 +143,7 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.compact_variant, "strip")
         self.assertEqual(settings.compact_alpha, 0.73)
         self.assertEqual(settings.graph_days, "14")
+        self.assertEqual(settings.graph_languages, ("C++",))
         self.assertEqual(settings.note_tab, "schedule")
         self.assertEqual(settings.schedule_path, "")
 
@@ -157,6 +176,7 @@ class SettingsTests(unittest.TestCase):
                 "graph_show_additions": True,
                 "graph_show_deletions": False,
                 "graph_show_commits": False,
+                "graph_languages": ["C++"],
                 "graph_curve": 35.0,
                 "auto_refresh": False,
                 "author": "me",
@@ -165,10 +185,12 @@ class SettingsTests(unittest.TestCase):
                 "compact_alpha": 0.73,
                 "note_tab": "grass",
                 "schedule_path": "docs/SCHEDULE.md",
+                "selected_branches": [],
                 "repo_path": "C:/repo",
                 "lang": "ko",
                 "theme": "cream",
                 "geometry": "1200x700+10+20",
+                "geometry_revision": 0,
             },
         )
 
@@ -184,6 +206,11 @@ class SettingsTests(unittest.TestCase):
 
         self.assertEqual(settings.note_tab, "schedule")
         self.assertNotIn("todo_items", settings.to_dict())
+
+    def test_ui_settings_persists_unique_selected_branches(self) -> None:
+        settings = UISettings.from_dict({"selected_branches": ["feature/a", "feature/b", "feature/a"]})
+        self.assertEqual(settings.selected_branches, ("feature/a", "feature/b"))
+        self.assertEqual(settings.to_dict()["selected_branches"], ["feature/a", "feature/b"])
 
     def test_ui_settings_accepts_schedule_tab_and_path(self) -> None:
         settings = UISettings.from_dict(

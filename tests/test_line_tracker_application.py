@@ -3,22 +3,54 @@ import tempfile
 import unittest
 from pathlib import Path
 import sys
-from unittest.mock import Mock, sentinel
+from unittest.mock import Mock, patch, sentinel
 
 
 APP_DIR = Path(__file__).resolve().parents[1] / "app"
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
-from line_tracker import TrackerConfig
+from line_tracker import TrackerConfig, get_commit_detail
 from line_tracker_authors import build_author_option_entries, parse_shortlog_identities
 from line_tracker_controller import RefreshCoordinator
 from line_tracker_graph import flatten_graph_points, smooth_graph_points, summarize_graph_values
 from line_tracker_presenters import build_progress_presentation
+from line_tracker_repository import find_repo_root_from_metadata
 from line_tracker_settings import UISettings, load_ui_settings, save_ui_settings
 
 
 class ApplicationBoundaryTests(unittest.TestCase):
+    def test_commit_detail_parses_metadata_text_and_binary_file_changes(self) -> None:
+        metadata = (
+            "fullhash\x00abc1234\x002026-08-04T21:30:00+09:00\x00Groun\x00groun@example.com\x00"
+            "Commit subject\x00Detailed body\n"
+        )
+        numstat = "12\t3\tapp/main.py\n-\t-\tassets/icon.png\n"
+
+        with patch("line_tracker.run_git", side_effect=(metadata, numstat)) as run:
+            detail = get_commit_detail(Path("C:/repo"), "fullhash")
+
+        self.assertEqual(detail.subject, "Commit subject")
+        self.assertEqual(detail.body, "Detailed body")
+        self.assertEqual(detail.author_name, "Groun")
+        self.assertEqual((detail.insertions, detail.deletions), (12, 3))
+        self.assertEqual(len(detail.files), 2)
+        self.assertTrue(detail.files[1].is_binary)
+        self.assertEqual(run.call_count, 2)
+
+    def test_find_repo_root_from_metadata_does_not_require_git_process(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            repo = Path(tmp_dir) / "repo"
+            nested = repo / "tools" / "app"
+            nested.mkdir(parents=True)
+            (repo / ".git").mkdir()
+
+            self.assertEqual(find_repo_root_from_metadata(nested), repo.resolve())
+
+            (repo / ".git").rmdir()
+            (repo / ".git").write_text("gitdir: ../metadata", encoding="ascii")
+            self.assertEqual(find_repo_root_from_metadata(nested), repo.resolve())
+
     def test_settings_roundtrip_without_ui_objects(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             settings_path = Path(tmp_dir) / "settings.json"

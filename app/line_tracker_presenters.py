@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -27,6 +28,7 @@ class StatCardPresentation:
 @dataclass(frozen=True)
 class StatSectionPresentation:
     title: str
+    scope: str = ""
     added: str = ""
     removed: str = ""
     commits: str = ""
@@ -36,8 +38,7 @@ class StatSectionPresentation:
 @dataclass(frozen=True)
 class DashboardPresentation:
     date_text: str
-    daily: StatSectionPresentation
-    branch: StatSectionPresentation
+    branches: tuple[StatSectionPresentation, ...]
     overall: StatSectionPresentation
     user: StatSectionPresentation
 
@@ -98,71 +99,115 @@ def build_dashboard_presentation(
     snapshot: RefreshSnapshot,
     *,
     translate: Translator,
+    user_title: str,
 ) -> DashboardPresentation:
     result = snapshot.result
     lines_suffix = translate("lines_suffix")
     day_suffix = translate("day_suffix")
-    per_day_suffix = translate("per_day_suffix")
     user_total = result.committed_total + result.uncommitted_insertions
 
     return DashboardPresentation(
         date_text=result.today.isoformat(),
-        daily=StatSectionPresentation(
-            title=translate("daily_stats_section"),
-            added=f"+{result.uncommitted_insertions:,}",
-            removed=f"-{snapshot.uncommitted_deletions:,}",
-            commits=f"{snapshot.daily_commit_count:,} commit",
-            cards=(
-                StatCardPresentation(
-                    translate("daily_required_label"),
-                    f"{result.need_today}{per_day_suffix}",
+        branches=tuple(
+            StatSectionPresentation(
+                title=stats.ref,
+                added=f"+{stats.additions:,}",
+                removed=f"-{stats.deletions:,}",
+                commits=f"{stats.commits:,} commit",
+                cards=(
+                    StatCardPresentation(
+                        translate("branch_selected_additions_label"),
+                        f"{stats.additions:,}{lines_suffix}",
+                    ),
+                    StatCardPresentation(
+                        translate("branch_active_days_label"),
+                        f"{stats.active_days:,}{day_suffix}",
+                    ),
+                    StatCardPresentation(
+                        translate("branch_activity_period_label"),
+                        (
+                            f"{max(0, (result.today - stats.started_on).days + 1):,}{day_suffix}"
+                            if stats.started_on is not None
+                            else translate("branch_activity_period_unknown")
+                        ),
+                    ),
                 ),
-                StatCardPresentation(
-                    translate("after_commit_daily_label"),
-                    f"{result.need_after_commit}{per_day_suffix}",
-                ),
-            ),
-        ),
-        branch=StatSectionPresentation(
-            title=translate("branch_stats_section"),
-            added=f"+{snapshot.branch_total:,}",
-            removed=f"-{snapshot.branch_deletions:,}",
-            commits=f"{snapshot.branch_commit_count:,} commit",
-            cards=(
-                StatCardPresentation(
-                    translate("branch_only_label"),
-                    f"{snapshot.branch_total:,}{lines_suffix}",
-                ),
-                StatCardPresentation(
-                    translate("branch_active_days_label"),
-                    f"{snapshot.branch_active_days:,}{day_suffix}",
-                ),
-            ),
+            )
+            for stats in snapshot.branch_stats
         ),
         overall=StatSectionPresentation(
             title=translate("overall_stats_section"),
-            added=f"+{user_total:,}",
-            removed=f"-{snapshot.overall_deletions + snapshot.uncommitted_deletions:,}",
-            commits=f"{snapshot.overall_commit_count:,} commit",
+            added=f"+{snapshot.project_cumulative_lines:,}",
+            removed=f"-{snapshot.project_cumulative_deletions:,}",
+            commits=f"{snapshot.project_commit_count:,} commit",
             cards=(
                 StatCardPresentation(
                     translate("project_total_label"),
                     f"{snapshot.project_total_lines:,}{lines_suffix}",
                 ),
-                StatCardPresentation(translate("share_label"), snapshot.share_text),
+                StatCardPresentation(
+                    translate("project_cumulative_lines_label"),
+                    f"{snapshot.project_cumulative_lines:,}{lines_suffix}",
+                ),
+                StatCardPresentation(
+                    translate("project_active_days_label"),
+                    f"{snapshot.project_active_days:,}{day_suffix}",
+                ),
+                StatCardPresentation(
+                    translate("repository_birth_date_label"),
+                    snapshot.repository_birth_date.isoformat()
+                    if snapshot.repository_birth_date is not None
+                    else translate("repository_age_unknown"),
+                ),
+                StatCardPresentation(
+                    translate("repository_age_label"),
+                    format_repository_age(
+                        snapshot.repository_birth_date,
+                        result.today,
+                        translate=translate,
+                    ),
+                ),
             ),
         ),
         user=StatSectionPresentation(
-            title=translate("user_stats_section"),
+            title=user_title,
+            added=f"+{user_total:,}",
+            removed=f"-{snapshot.overall_deletions + snapshot.uncommitted_deletions:,}",
+            commits=f"{snapshot.overall_commit_count:,} commit",
             cards=(
                 StatCardPresentation(translate("user_total_label"), f"{user_total:,}{lines_suffix}"),
                 StatCardPresentation(
                     translate("user_active_days_label"),
                     f"{snapshot.overall_active_days:,}{day_suffix}",
                 ),
+                StatCardPresentation(translate("share_label"), snapshot.share_text),
             ),
         ),
     )
+
+
+def format_repository_age(
+    birth_date: dt.date | None,
+    today: dt.date,
+    *,
+    translate: Translator,
+) -> str:
+    if birth_date is None:
+        return translate("repository_age_unknown")
+    if today < birth_date:
+        today = birth_date
+    total_months = (today.year - birth_date.year) * 12 + today.month - birth_date.month
+    if today.day < birth_date.day:
+        total_months -= 1
+    total_months = max(total_months, 0)
+    years, months = divmod(total_months, 12)
+    if years and months:
+        return translate("repository_age_years_months", years=years, months=months)
+    if years:
+        return translate("repository_age_years", years=years)
+    if months:
+        return translate("repository_age_months", months=months)
+    return translate("repository_age_days", days=max((today - birth_date).days, 0))
 
 
 def _bounded_percent(current: int, target: int, *, zero_target_complete: bool) -> float:

@@ -7,7 +7,7 @@ from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
 from line_tracker_grass import GRASS_FIXED_LEVEL_BANDS, GRASS_UNCOMMITTED_LEVEL_COLORS
-from qt_app.theme import QtThemeTokens
+from qt_app.theme import PANEL_PADDING, PANEL_SPACING, QtThemeTokens
 
 
 class GrassView(QWidget):
@@ -20,8 +20,8 @@ class GrassView(QWidget):
         self.uncommitted_today = 0
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(PANEL_PADDING, PANEL_PADDING, PANEL_PADDING, PANEL_PADDING)
+        layout.setSpacing(PANEL_SPACING)
         self.legend = QHBoxLayout()
         self.legend.setSpacing(12)
         layout.addLayout(self.legend)
