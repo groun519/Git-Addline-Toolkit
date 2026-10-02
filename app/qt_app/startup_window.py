@@ -193,15 +193,16 @@ class StartupWindow(QFrame):
             self.heading.setText(self.t("startup_repo_required_title"))
             self.status.setText(self.t("startup_repo_invalid"))
             return
-        self.repo = repo
-        self.settings = replace(self.settings, repo_path=str(repo))
-        if not save_ui_settings(self.settings_path, self.settings):
+        next_settings = replace(self.settings, repo_path=str(repo))
+        if not save_ui_settings(self.settings_path, next_settings):
             QMessageBox.warning(
                 self,
                 self.t("settings_save_error_title"),
                 self.t("settings_save_error", path=str(self.settings_path)),
             )
             return
+        self.repo = repo
+        self.settings = next_settings
         self._show_repository(repo)
         self.start_loading()
 

@@ -13,6 +13,8 @@ from line_tracker import (
     decode_author_patterns,
     encode_author_patterns,
     get_commit_change_entries,
+    get_commit_count,
+    resolve_author,
     resolve_git_executable,
 )
 
@@ -89,6 +91,30 @@ class AuthorFilterTests(unittest.TestCase):
 
         self.assertEqual([entry.subject for entry in first_page], ["commit-4", "commit-3"])
         self.assertEqual([entry.subject for entry in second_page], ["commit-2", "commit-1"])
+
+    def test_auto_author_matches_name_or_email_with_git_default_regex_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            git = resolve_git_executable()
+
+            def run(*args: str) -> None:
+                subprocess.run([git, *args], cwd=repo, check=True, capture_output=True)
+
+            run("init", "-q")
+            run("config", "user.name", "Alice Example")
+            run("config", "user.email", "alice@example.com")
+            source = repo / "file.txt"
+            source.write_text("one\n", encoding="utf-8")
+            run("add", "file.txt")
+            run("commit", "-q", "-m", "first")
+
+            author = resolve_author(repo, "auto")
+
+            self.assertEqual(
+                decode_author_patterns(author),
+                [re.escape("alice@example.com")],
+            )
+            self.assertEqual(get_commit_count(repo, author), 1)
 
 
 if __name__ == "__main__":

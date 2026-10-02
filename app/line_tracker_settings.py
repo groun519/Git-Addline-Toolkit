@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from line_tracker import LANGUAGE_NAMES
+from line_tracker_io import write_text_atomic
 from line_tracker_theme import DEFAULT_THEME_NAME, resolve_theme_name
 
 
@@ -144,11 +145,8 @@ def load_ui_settings(settings_path: Path, legacy_settings_path: Path) -> UISetti
 
 def save_ui_settings(settings_path: Path, settings: UISettings) -> bool:
     try:
-        settings_path.parent.mkdir(parents=True, exist_ok=True)
-        settings_path.write_text(
-            json.dumps(settings.to_dict(), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        payload = json.dumps(settings.to_dict(), ensure_ascii=False, indent=2)
+        write_text_atomic(settings_path, payload)
     except OSError:
         return False
     return True

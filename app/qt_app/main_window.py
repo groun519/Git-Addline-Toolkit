@@ -537,12 +537,16 @@ class LineTrackerQtWindow(QMainWindow):
         if repo is None:
             QMessageBox.warning(self, self.t("repo_dialog_title"), self.t("error_repo_invalid"))
             return
+        if not self._save_settings(
+            notify=True,
+            candidate=replace(self.settings, repo_path=str(repo)),
+        ):
+            return
         self.refresh_coordinator.invalidate()
         self.repo = repo
         self.repo_selected = True
         self.author = resolve_author(repo, self.author_raw)
         self._update_repo_header()
-        self._save_settings(notify=True)
         self._load_schedule(force=True)
         self.refresh()
 
@@ -805,8 +809,7 @@ class LineTrackerQtWindow(QMainWindow):
         elif index == 1:
             note_tab = "grass"
         if note_tab is not None and note_tab != self.settings.note_tab:
-            self.settings = replace(self.settings, note_tab=note_tab)
-            self._save_settings()
+            self._save_settings(candidate=replace(self.settings, note_tab=note_tab))
         if index == 0 and self.repo_selected and self.schedule_mtime_ns is None:
             self.initial_schedule_timer.start()
 
@@ -825,8 +828,11 @@ class LineTrackerQtWindow(QMainWindow):
             QMessageBox.warning(self, self.t("schedule_dialog_title"), self.t("schedule_error_extension"))
             return
         stored_path = make_portable_schedule_path(self.repo, path) if self.repo_selected else str(path.resolve())
-        self.settings = replace(self.settings, schedule_path=stored_path)
-        self._save_settings(notify=True)
+        if not self._save_settings(
+            notify=True,
+            candidate=replace(self.settings, schedule_path=stored_path),
+        ):
+            return
         self._load_schedule(force=True)
 
     def _load_schedule(self, *, force: bool = False) -> None:
@@ -1008,8 +1014,7 @@ class LineTrackerQtWindow(QMainWindow):
         )
         change_scope = classify_settings_change(previous_settings, next_settings)
         if change_scope in {"none", "graph_render"}:
-            self.settings = next_settings
-            if not self._save_settings(notify=True):
+            if not self._save_settings(notify=True, candidate=next_settings):
                 return
             if restart_requested:
                 self._restart_application()
@@ -1017,6 +1022,8 @@ class LineTrackerQtWindow(QMainWindow):
                 self._render_graph(self.last_snapshot)
             return
 
+        if not self._save_settings(notify=True, candidate=next_settings):
+            return
         self.refresh_coordinator.invalidate()
         self.commit_history_generation += 1
         self.repo = repo or Path(values.repo_path or self.args.repo).resolve()
@@ -1036,11 +1043,8 @@ class LineTrackerQtWindow(QMainWindow):
             )
         except ValueError:
             self.today_override = None
-        self.settings = next_settings
         self._rebuild_ui()
         self._configure_timers()
-        if not self._save_settings(notify=True):
-            return
         self._load_schedule(force=True)
         if restart_requested:
             self._restart_application()
@@ -1216,19 +1220,28 @@ class LineTrackerQtWindow(QMainWindow):
             max_y = screen.bottom() - self.height() + 1
             self.move(min(max(x_pos, screen.left()), max_x), min(max(y_pos, screen.top()), max_y))
 
-    def _save_settings(self, *, notify: bool = False) -> bool:
+    def _save_settings(
+        self,
+        *,
+        notify: bool = False,
+        candidate: UISettings | None = None,
+    ) -> bool:
         if self.capture_mode:
+            if candidate is not None:
+                self.settings = candidate
             return True
         geometry = f"{self.width()}x{self.height()}+{self.x()}+{self.y()}"
-        self.settings = replace(
+        settings = candidate or replace(
             self.settings,
             repo_path=str(self.repo) if self.repo_selected else "",
             lang=self.lang,
             theme=self.theme_name,
             goal=self.goal,
-            geometry=geometry,
         )
-        saved = save_ui_settings(self.settings_path, self.settings)
+        settings = replace(settings, geometry=geometry)
+        saved = save_ui_settings(self.settings_path, settings)
+        if saved:
+            self.settings = settings
         if not saved and notify:
             QMessageBox.warning(
                 self,

@@ -549,6 +549,31 @@ class QtApplicationTests(unittest.TestCase):
 
         self.assertFalse(saved)
         warning.assert_called_once()
+        self.assertEqual(subject.settings, UISettings())
+
+    def test_repository_selection_does_not_apply_when_settings_save_fails(self) -> None:
+        from line_tracker_args import make_ui_parser
+        from qt_app.main_window import LineTrackerQtWindow
+
+        args = make_ui_parser().parse_args(["--repo", str(Path.cwd())])
+        window = LineTrackerQtWindow(args, capture_mode=True)
+        original_repo = window.repo
+        selected_repo = original_repo.parent
+
+        with (
+            patch(
+                "qt_app.main_window.QFileDialog.getExistingDirectory",
+                return_value=str(selected_repo),
+            ),
+            patch("qt_app.main_window.resolve_valid_repo", return_value=selected_repo),
+            patch.object(window, "_save_settings", return_value=False),
+            patch.object(window, "refresh") as refresh,
+        ):
+            window.choose_repository()
+
+        self.assertEqual(window.repo, original_repo)
+        refresh.assert_not_called()
+        window.close()
 
     def test_first_run_startup_waits_for_repository_selection(self) -> None:
         from line_tracker_args import make_ui_parser

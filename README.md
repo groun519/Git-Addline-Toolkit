@@ -36,8 +36,7 @@ Current app version is managed by [VERSION](/c:/Users/groun/Documents/git-reposi
 설치본 기준:
 
 - Python은 필요 없습니다.
-- Git은 필요합니다.
-- `vendor\PortableGit\cmd\git.exe`를 넣고 빌드하면 Git도 함께 번들됩니다.
+- Git을 따로 설치할 필요가 없습니다. 설치본에 검증된 64-bit MinGit이 포함됩니다.
 - 기본 설치 경로는 `%LocalAppData%\Programs\LineTracker`입니다.
 - 설정과 캐시는 `%LocalAppData%\LineTracker`에 저장됩니다.
 
@@ -162,11 +161,12 @@ python app\line_tracker_ui.pyw --repo C:\path\to\repo
 - `requirements.txt`의 PySide6 런타임(빌드 스크립트가 자동 설치)
 - Inno Setup
 
-### Optional: Bundle Git
+### Bundled Git
 
-- `vendor\PortableGit\cmd\git.exe`가 있으면 빌드 시 설치본에 포함됩니다.
-- 이 경우 설치받는 사용자는 Git을 따로 설치하지 않아도 됩니다.
-- 위치 설명은 [vendor/PortableGit/README.md](/c:/Users/groun/Documents/git-repositories/PROJECT-MA/tools/Git-Addline-Toolkit/vendor/PortableGit/README.md)에 있습니다.
+- 빌드 시 `cmd\git.exe`가 없으면 고정된 64-bit MinGit 릴리스를 자동으로 내려받습니다.
+- 다운로드 파일은 SHA-256 검증 후 `vendor\PortableGit`에 압축 해제됩니다.
+- 최초 빌드에는 인터넷 연결이 필요하며, 이후에는 검증된 다운로드 캐시를 재사용합니다.
+- 버전 갱신 방법은 [vendor/PortableGit/README.md](/c:/Users/groun/Documents/git-repositories/PROJECT-MA/tools/Git-Addline-Toolkit/vendor/PortableGit/README.md)에 있습니다.
 
 ### Optional: Custom App Icon
 
@@ -185,7 +185,7 @@ python app\line_tracker_ui.pyw --repo C:\path\to\repo
 2. `python -m unittest discover -s tests -t . -v` 실행
 3. 테스트 통과 후 GUI 앱과 `LineTrackerCli.exe` 빌드
 4. Inno Setup으로 설치 파일 생성
-5. `exe_maker\smoke_test_installer.bat`로 무소음 설치 + 설치본 CLI 스모크 검증
+5. `exe_maker\smoke_test_installer.bat`로 무소음 설치 + 시스템 Git을 배제한 설치본 CLI 스모크 검증
 6. 최종 결과물은 `exe_maker\dist\LineTrackerSetup.exe`
 
 스모크 검증을 건너뛰고 싶으면:
@@ -198,7 +198,7 @@ exe_maker\build_installer.bat
 ## Troubleshooting
 
 - 설치본에서 Git이 없다고 나옴
-  Git for Windows를 설치하거나 `vendor\PortableGit`를 번들해서 다시 빌드하세요.
+  설치 파일을 다시 빌드하세요. 빌드는 MinGit 누락 또는 체크섬 불일치 시 실패해야 합니다.
 - 내 리포지토리가 아니라 툴 저장소가 잡힘
   `리포 경로`를 리포지토리 폴더로 바꾸고 `리포 선택` 후 `새로고침` 하세요.
 - 0줄만 보임

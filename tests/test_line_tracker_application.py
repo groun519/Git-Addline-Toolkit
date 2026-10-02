@@ -61,6 +61,23 @@ class ApplicationBoundaryTests(unittest.TestCase):
 
         self.assertEqual(loaded, settings)
 
+    def test_settings_replace_failure_preserves_previous_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            settings_path = Path(tmp_dir) / "settings.json"
+            original = UISettings(repo_path="C:/original")
+            updated = UISettings(repo_path="C:/updated")
+            self.assertTrue(save_ui_settings(settings_path, original))
+
+            with patch("line_tracker_io.os.replace", side_effect=OSError("locked")):
+                saved = save_ui_settings(settings_path, updated)
+
+            self.assertFalse(saved)
+            self.assertEqual(
+                load_ui_settings(settings_path, Path(tmp_dir) / "legacy.json"),
+                original,
+            )
+            self.assertEqual(list(Path(tmp_dir).glob("*.tmp")), [])
+
     def test_author_options_parse_shortlog_without_ui_objects(self) -> None:
         identities = parse_shortlog_identities(
             "  2\tgroun519 <54619610+groun519@users.noreply.github.com>\n"

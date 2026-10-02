@@ -11,6 +11,7 @@ set "APP_EXE="
 set "CLI_EXE="
 set "SETUP_CHECK="
 set "UNINSTALL_EXE="
+set "BUNDLED_GIT="
 set "APP_PID="
 
 if not defined INSTALLER set "INSTALLER=%SCRIPT_DIR%\dist\LineTrackerSetup.exe"
@@ -44,6 +45,7 @@ set "APP_EXE=%INSTALL_DIR%\LineTracker.exe"
 set "CLI_EXE=%INSTALL_DIR%\LineTrackerCli.exe"
 set "SETUP_CHECK=%INSTALL_DIR%\setup\setup_check.bat"
 set "UNINSTALL_EXE=%INSTALL_DIR%\unins000.exe"
+set "BUNDLED_GIT=%INSTALL_DIR%\PortableGit\cmd\git.exe"
 
 if not exist "%APP_EXE%" (
   echo Installed app not found: "%APP_EXE%"
@@ -60,13 +62,22 @@ if not exist "%UNINSTALL_EXE%" (
   exit /b 1
 )
 
+if not exist "%BUNDLED_GIT%" (
+  echo Bundled Git not found: "%BUNDLED_GIT%"
+  exit /b 1
+)
+
 echo Running installed app smoke check...
 if exist "%CLI_EXE%" (
+  set "ORIGINAL_PATH=%PATH%"
+  set "PATH=%SystemRoot%\System32;%SystemRoot%"
   "%CLI_EXE%" --repo "%REPO_PATH%"
   if errorlevel 1 (
+    set "PATH=%ORIGINAL_PATH%"
     echo Installed CLI smoke check failed.
     exit /b 1
   )
+  set "PATH=%ORIGINAL_PATH%"
 ) else (
   start "" "%APP_EXE%" --once --repo "%REPO_PATH%"
   if errorlevel 1 (

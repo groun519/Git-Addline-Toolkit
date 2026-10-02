@@ -9,6 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from line_tracker_io import write_text_atomic
 from line_tracker import (
     LANGUAGE_NAMES,
     TrackerConfig,
@@ -143,6 +144,29 @@ class ProjectHistoryStats:
     birth_date: dt.date | None
 
 
+@dataclass(frozen=True)
+class SelectedBranchMetrics:
+    all_activity: dict[str, BranchCommitActivity]
+    branch_stats: tuple[BranchStats, ...]
+    branch_total: int
+    branch_deletions: int
+    branch_commit_count: int
+    branch_active_days: int
+    user_committed_total: int
+    user_deletions: int
+    user_commit_count: int
+    user_active_days: int
+    user_scope_total: int
+    result: TrackerResult
+
+
+@dataclass(frozen=True)
+class ActivityMaps:
+    languages_by_date: dict[dt.date, dict[str, int]]
+    deletions_by_date: dict[dt.date, int]
+    commits_by_date: dict[dt.date, int]
+
+
 def includes_tracked_branch(tracked_ref: str, branch_refs: tuple[str, ...]) -> bool:
     local_name = tracked_ref.split("/", 1)[-1]
     return tracked_ref in branch_refs or local_name in branch_refs
@@ -215,14 +239,13 @@ def _save_branch_union_cache() -> None:
             for cache_key, activity in _BRANCH_UNION_CACHE.items()
         }
     try:
-        _BRANCH_UNION_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _BRANCH_UNION_CACHE_PATH.write_text(
+        write_text_atomic(
+            _BRANCH_UNION_CACHE_PATH,
             json.dumps(
                 {"version": _BRANCH_UNION_CACHE_VERSION, "entries": entries},
                 ensure_ascii=False,
                 separators=(",", ":"),
             ),
-            encoding="utf-8",
         )
     except OSError:
         return
@@ -629,6 +652,172 @@ def _summarize_points(points: list[tuple[dt.date, int]]) -> tuple[float, int]:
     return graph_avg, graph_max
 
 
+def _build_selected_branch_metrics(
+    repo: Path,
+    author: str,
+    config: TrackerConfig,
+    tracked_ref: str,
+    base_ref: str,
+    selected_branches: tuple[str, ...],
+    tracked_selected: bool,
+    result: TrackerResult,
+) -> SelectedBranchMetrics:
+    unique_exclude_ref = base_ref if tracked_selected else tracked_ref
+    all_activity = get_branch_union_activity(repo, "", selected_branches, unique_exclude_ref)
+    user_activity = _filter_activity_by_author(all_activity, author)
+    all_cumulative_activity = (
+        all_activity
+        if tracked_selected
+        else get_branch_union_activity(repo, "", selected_branches, base_ref)
+    )
+    user_cumulative_activity = _filter_activity_by_author(all_cumulative_activity, author)
+
+    branch_stats: list[BranchStats] = []
+    for branch in selected_branches:
+        exclude_ref = base_ref if includes_tracked_branch(tracked_ref, (branch,)) else tracked_ref
+        branch_commits = set(run_git(repo, ["rev-list", branch, "--not", exclude_ref]).splitlines())
+        activity = [
+            item
+            for commit_hash, item in user_activity.items()
+            if commit_hash in branch_commits
+        ]
+        branch_stats.append(
+            BranchStats(
+                branch,
+                sum(item.additions for item in activity),
+                sum(item.deletions for item in activity),
+                len(activity),
+                len({item.day for item in activity}),
+                _get_branch_activity_start(repo, branch, tracked_ref),
+            )
+        )
+
+    branch_total = sum(item.additions for item in user_activity.values())
+    branch_deletions = sum(item.deletions for item in user_activity.values())
+    user_base_total = (
+        config.base_total
+        if config.base_total >= 0
+        else get_total_insertions_up_to(repo, base_ref, author)
+    )
+    user_committed_total = user_base_total + sum(
+        item.additions for item in user_cumulative_activity.values()
+    )
+    user_deletions = get_total_deletions_up_to(repo, base_ref, author) + sum(
+        item.deletions for item in user_cumulative_activity.values()
+    )
+    user_commit_count, user_active_days = get_branch_union_commit_summary(
+        repo,
+        author,
+        selected_branches,
+    )
+    all_author_base_total = (
+        user_base_total if not author else get_total_insertions_up_to(repo, base_ref, "")
+    )
+    user_scope_total = all_author_base_total + sum(
+        item.additions for item in all_cumulative_activity.values()
+    )
+    updated_result = replace(
+        result,
+        committed_total=user_committed_total,
+        need_today=daily_needed(
+            config.goal,
+            user_committed_total,
+            result.days_left_including_today,
+        ),
+        need_after_commit=daily_needed(
+            config.goal,
+            user_committed_total + result.uncommitted_insertions,
+            result.days_left_after_today,
+        ),
+    )
+    return SelectedBranchMetrics(
+        all_activity=all_activity,
+        branch_stats=tuple(branch_stats),
+        branch_total=branch_total,
+        branch_deletions=branch_deletions,
+        branch_commit_count=len(user_activity),
+        branch_active_days=len({item.day for item in user_activity.values()}),
+        user_committed_total=user_committed_total,
+        user_deletions=user_deletions,
+        user_commit_count=user_commit_count,
+        user_active_days=user_active_days,
+        user_scope_total=user_scope_total,
+        result=updated_result,
+    )
+
+
+def _build_activity_maps(
+    repo: Path,
+    author: str,
+    selected_branches: tuple[str, ...],
+    tracked_selected: bool,
+    all_selected_activity: dict[str, BranchCommitActivity],
+    window_start_day: dt.date,
+    window_end_day: dt.date,
+    tracked_ref: str,
+    include_local: bool,
+) -> ActivityMaps:
+    if selected_branches:
+        selected_activity = (
+            get_branch_union_activity(
+                repo,
+                author,
+                selected_branches,
+                None,
+                window_start_day,
+                window_end_day,
+            )
+            if tracked_selected
+            else _filter_activity_by_author(
+                _filter_activity_by_date(
+                    all_selected_activity,
+                    window_start_day,
+                    window_end_day,
+                ),
+                author,
+            )
+        )
+        languages_by_date: dict[dt.date, dict[str, int]] = {}
+        deletions_by_date: dict[dt.date, int] = {}
+        commits_by_date: dict[dt.date, int] = {}
+        for activity in selected_activity.values():
+            day = activity.day
+            languages_by_date[day] = merge_language_totals(
+                languages_by_date.get(day, {}),
+                activity.languages,
+            )
+            deletions_by_date[day] = deletions_by_date.get(day, 0) + activity.deletions
+            commits_by_date[day] = commits_by_date.get(day, 0) + 1
+        return ActivityMaps(languages_by_date, deletions_by_date, commits_by_date)
+
+    return ActivityMaps(
+        get_committed_insertions_by_date_and_language_combined(
+            repo,
+            window_start_day,
+            window_end_day,
+            author,
+            tracked_ref,
+            include_local,
+        ),
+        get_committed_deletions_by_date_combined(
+            repo,
+            window_start_day,
+            window_end_day,
+            author,
+            tracked_ref,
+            include_local,
+        ),
+        get_commit_counts_by_date_combined(
+            repo,
+            window_start_day,
+            window_end_day,
+            author,
+            tracked_ref,
+            include_local,
+        ),
+    )
+
+
 def build_refresh_snapshot(
     repo: Path,
     author: str,
@@ -683,67 +872,31 @@ def build_refresh_snapshot(
     base_ref = resolve_base_commit(repo, result.today, config.base_commit, tracked_ref)
     _report_progress(progress, 35, "branch")
     user_scope_total = 0
+    all_unique_activity: dict[str, BranchCommitActivity] = {}
     if selected_branches:
-        unique_exclude_ref = base_ref if tracked_selected else tracked_ref
-        all_unique_activity = get_branch_union_activity(
-            repo, "", selected_branches, unique_exclude_ref
-        )
-        unique_activity = _filter_activity_by_author(all_unique_activity, author)
-        all_user_union_activity = (
-            all_unique_activity
-            if tracked_selected
-            else get_branch_union_activity(repo, "", selected_branches, base_ref)
-        )
-        user_union_activity = _filter_activity_by_author(all_user_union_activity, author)
-        branch_stats_list: list[BranchStats] = []
-        for branch in selected_branches:
-            exclude_ref = base_ref if includes_tracked_branch(tracked_ref, (branch,)) else tracked_ref
-            branch_commits = set(run_git(repo, ["rev-list", branch, "--not", exclude_ref]).splitlines())
-            activity = [item for commit_hash, item in unique_activity.items() if commit_hash in branch_commits]
-            branch_stats_list.append(BranchStats(
-                branch,
-                sum(item.additions for item in activity),
-                sum(item.deletions for item in activity),
-                len(activity),
-                len({item.day for item in activity}),
-                _get_branch_activity_start(repo, branch, tracked_ref),
-            ))
-        branch_stats = tuple(branch_stats_list)
-        branch_total = sum(item.additions for item in unique_activity.values())
-        branch_deletions = sum(item.deletions for item in unique_activity.values())
-        branch_commit_count = len(unique_activity)
-        branch_active_days = len({item.day for item in unique_activity.values()})
-        progress_branch_total = branch_total
-        user_base_total = (
-            config.base_total
-            if config.base_total >= 0
-            else get_total_insertions_up_to(repo, base_ref, author)
-        )
-        user_committed_total = user_base_total + sum(
-            item.additions for item in user_union_activity.values()
-        )
-        overall_deletions = get_total_deletions_up_to(repo, base_ref, author) + sum(
-            item.deletions for item in user_union_activity.values()
-        )
-        overall_commit_count, overall_active_days = get_branch_union_commit_summary(
-            repo, author, selected_branches
-        )
-        all_author_base_total = (
-            user_base_total if not author else get_total_insertions_up_to(repo, base_ref, "")
-        )
-        user_scope_total = all_author_base_total + sum(
-            item.additions for item in all_user_union_activity.values()
-        )
-        result = replace(
+        selected_metrics = _build_selected_branch_metrics(
+            repo,
+            author,
+            config,
+            tracked_ref,
+            base_ref,
+            selected_branches,
+            tracked_selected,
             result,
-            committed_total=user_committed_total,
-            need_today=daily_needed(config.goal, user_committed_total, result.days_left_including_today),
-            need_after_commit=daily_needed(
-                config.goal,
-                user_committed_total + result.uncommitted_insertions,
-                result.days_left_after_today,
-            ),
         )
+        all_unique_activity = selected_metrics.all_activity
+        branch_stats = selected_metrics.branch_stats
+        branch_total = selected_metrics.branch_total
+        branch_deletions = selected_metrics.branch_deletions
+        branch_commit_count = selected_metrics.branch_commit_count
+        branch_active_days = selected_metrics.branch_active_days
+        progress_branch_total = branch_total
+        user_committed_total = selected_metrics.user_committed_total
+        overall_deletions = selected_metrics.user_deletions
+        overall_commit_count = selected_metrics.user_commit_count
+        overall_active_days = selected_metrics.user_active_days
+        user_scope_total = selected_metrics.user_scope_total
+        result = selected_metrics.result
     else:
         branch_total = _compute_branch_total(repo, author, tracked_ref, current_ref)
         progress_branch_total = branch_total
@@ -805,57 +958,31 @@ def build_refresh_snapshot(
     grass_start_day, grass_end_day = get_grass_date_range(result.today)
     window_start_day = min(graph_available_start_day, grass_start_day)
     window_end_day = grass_end_day
-    if selected_branches:
-        selected_activity = (
-            get_branch_union_activity(
-                repo,
-                author,
-                selected_branches,
-                None,
-                window_start_day,
-                window_end_day,
-            )
-            if tracked_selected
-            else _filter_activity_by_author(
-                _filter_activity_by_date(all_unique_activity, window_start_day, window_end_day),
-                author,
-            )
-        )
-        language_added_by_date: dict[dt.date, dict[str, int]] = {}
-        deleted_by_date: dict[dt.date, int] = {}
-        commit_counts_by_date: dict[dt.date, int] = {}
-        for activity in selected_activity.values():
-            day = activity.day
-            language_added_by_date[day] = merge_language_totals(
-                language_added_by_date.get(day, {}), activity.languages
-            )
-            deleted_by_date[day] = deleted_by_date.get(day, 0) + activity.deletions
-            commit_counts_by_date[day] = commit_counts_by_date.get(day, 0) + 1
-        daily_language_by_date = language_added_by_date
-        daily_deleted_by_date = deleted_by_date
-    else:
-        language_added_by_date = get_committed_insertions_by_date_and_language_combined(
-            repo, window_start_day, window_end_day, author, tracked_ref, config.include_local
-        )
-        deleted_by_date = get_committed_deletions_by_date_combined(
-            repo, window_start_day, window_end_day, author, tracked_ref, config.include_local
-        )
-        commit_counts_by_date = get_commit_counts_by_date_combined(
-            repo, window_start_day, window_end_day, author, tracked_ref, config.include_local
-        )
-        daily_language_by_date = language_added_by_date
-        daily_deleted_by_date = deleted_by_date
+    activity_maps = _build_activity_maps(
+        repo,
+        author,
+        selected_branches,
+        tracked_selected,
+        all_unique_activity,
+        window_start_day,
+        window_end_day,
+        tracked_ref,
+        config.include_local,
+    )
+    language_added_by_date = activity_maps.languages_by_date
+    deleted_by_date = activity_maps.deletions_by_date
+    commit_counts_by_date = activity_maps.commits_by_date
     daily_commit_count = commit_counts_by_date.get(result.today, 0)
     added_by_date = {
         day: sum(language_totals.values())
         for day, language_totals in language_added_by_date.items()
     }
     daily_progress_language_lines = merge_language_totals(
-        daily_language_by_date.get(result.today, {}),
+        language_added_by_date.get(result.today, {}),
         uncommitted_language_lines,
     )
-    today_done = sum(daily_language_by_date.get(result.today, {}).values()) + result.uncommitted_insertions
-    daily_removed = daily_deleted_by_date.get(result.today, 0) + uncommitted_deletions
+    today_done = sum(language_added_by_date.get(result.today, {}).values()) + result.uncommitted_insertions
+    daily_removed = deleted_by_date.get(result.today, 0) + uncommitted_deletions
     all_added_points = _build_points_window(
         result,
         added_by_date,

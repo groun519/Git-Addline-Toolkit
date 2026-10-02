@@ -76,6 +76,14 @@ if errorlevel 1 (
 )
 
 echo.
+echo Preparing bundled Git runtime...
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%\ensure_portable_git.ps1"
+if errorlevel 1 (
+  echo Bundled Git provisioning failed. Aborting build.
+  exit /b 1
+)
+
+echo.
 echo Running test suite...
 "%PY_EXE%" -m unittest discover -s tests -t . -v
 if errorlevel 1 (
@@ -143,17 +151,15 @@ if exist "%PORTABLE_GIT_DST%" (
   rmdir /s /q "%PORTABLE_GIT_DST%"
 )
 
-if exist "%PORTABLE_GIT_SRC%\cmd\git.exe" (
-  echo.
-  echo Bundling PortableGit from "%PORTABLE_GIT_SRC%"
-  xcopy "%PORTABLE_GIT_SRC%" "%PORTABLE_GIT_DST%\" /E /I /Q /Y >nul
-  if errorlevel 1 exit /b 1
-) else (
-  echo.
-  echo PortableGit bundle not found.
-  echo To ship a self-contained installer, extract PortableGit to "%PORTABLE_GIT_SRC%"
-  echo Installer will require Git for Windows in PATH on the target PC.
+if not exist "%PORTABLE_GIT_SRC%\cmd\git.exe" (
+  echo Bundled Git runtime not found after provisioning.
+  exit /b 1
 )
+
+echo.
+echo Bundling MinGit from "%PORTABLE_GIT_SRC%"
+xcopy "%PORTABLE_GIT_SRC%" "%PORTABLE_GIT_DST%\" /E /I /Q /Y >nul
+if errorlevel 1 exit /b 1
 
 echo.
 echo Checking Inno Setup ^(iscc^)...

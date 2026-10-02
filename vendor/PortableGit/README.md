@@ -1,9 +1,10 @@
-PortableGit bundle location.
+Bundled MinGit runtime location.
 
-To make the installer self-contained:
+`exe_maker\build_installer.bat` provisions the pinned 64-bit MinGit release
+automatically when `cmd\git.exe` is missing. The download is SHA-256 verified
+before extraction.
 
-1. Download PortableGit for Windows.
-2. Extract it into this folder so that `vendor\PortableGit\cmd\git.exe` exists.
-3. Run `exe_maker\build_installer.bat`.
+To refresh the bundled version, update the version, release URL, and SHA-256 in
+`exe_maker\ensure_portable_git.ps1`, then rebuild.
 
-The actual PortableGit payload is ignored by Git. Only this instruction file is tracked.
+The actual MinGit payload is ignored by Git. Only this instruction file is tracked.

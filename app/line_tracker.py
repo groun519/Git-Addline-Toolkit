@@ -17,6 +17,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from line_tracker_io import write_text_atomic
+
 
 DEFAULT_GOAL = 20000
 DEFAULT_BASE_TOTAL = -1
@@ -339,11 +341,36 @@ def run_git(repo: Path, args: list[str]) -> str:
 
 
 def list_branch_refs(repo: Path) -> tuple[str, ...]:
-    output = run_git(repo, ["for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes"])
-    return tuple(
-        ref for ref in output.splitlines()
-        if ref and not ref.endswith("/HEAD")
+    output = run_git(
+        repo,
+        [
+            "for-each-ref",
+            "--format=%(refname)%09%(refname:short)%09%(objectname)%09%(symref)",
+            "refs/heads",
+            "refs/remotes",
+        ],
     )
+    local_hashes: dict[str, str] = {}
+    records: list[tuple[str, str, str]] = []
+    for line in output.splitlines():
+        fields = line.split("\t", 3)
+        if len(fields) != 4:
+            continue
+        full_ref, short_ref, object_hash, symref = fields
+        if not short_ref or symref:
+            continue
+        records.append((full_ref, short_ref, object_hash))
+        if full_ref.startswith("refs/heads/"):
+            local_hashes[short_ref] = object_hash
+
+    visible: list[str] = []
+    for full_ref, short_ref, object_hash in records:
+        if full_ref.startswith("refs/remotes/"):
+            _, separator, local_name = short_ref.partition("/")
+            if separator and local_hashes.get(local_name) == object_hash:
+                continue
+        visible.append(short_ref)
+    return tuple(visible)
 
 
 def find_repo_root(start: Path) -> Path:
@@ -522,11 +549,7 @@ def _save_cache() -> None:
                 [list(key), {day.isoformat(): val for day, val in value.items()}]
             )
     try:
-        _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _CACHE_PATH.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        write_text_atomic(_CACHE_PATH, json.dumps(payload, ensure_ascii=False, indent=2))
         _CACHE_DIRTY = False
     except OSError:
         pass
@@ -573,12 +596,10 @@ def resolve_author(repo: Path, author: str) -> str:
         email = run_git(repo, ["config", "user.email"]).strip()
     except RuntimeError:
         email = ""
-    if name and email:
-        return f"{re.escape(name)}|{re.escape(email)}"
-    if name:
-        return re.escape(name)
     if email:
         return re.escape(email)
+    if name:
+        return re.escape(name)
     return ""
 
 

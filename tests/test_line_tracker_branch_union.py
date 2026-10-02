@@ -196,6 +196,33 @@ class BranchUnionTests(unittest.TestCase):
             aliases = encode_author_patterns(["Alice", "alice@example.com"])
             self.assertEqual(get_branch_union_stats(repo, aliases, "main", ("feature/a", "feature/b")), (4, 1, 2, 2))
 
+    def test_branch_list_hides_remote_head_and_matching_local_remote_duplicates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            git = resolve_git_executable()
+
+            def run(*args: str) -> None:
+                subprocess.run([git, *args], cwd=repo, check=True, capture_output=True)
+
+            run("init", "-q")
+            run("config", "user.name", "Alice")
+            run("config", "user.email", "alice@example.com")
+            source = repo / "file.txt"
+            source.write_text("one\n", encoding="utf-8")
+            run("add", "file.txt")
+            run("commit", "-q", "-m", "base")
+            run("branch", "-M", "main")
+            run("update-ref", "refs/remotes/origin/main", "main")
+            run("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+            run("update-ref", "refs/remotes/origin/remote-only", "main")
+
+            branches = list_branch_refs(repo)
+
+            self.assertIn("main", branches)
+            self.assertIn("origin/remote-only", branches)
+            self.assertNotIn("origin", branches)
+            self.assertNotIn("origin/main", branches)
+
     def test_other_selected_user_does_not_receive_local_work(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
