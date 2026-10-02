@@ -95,8 +95,10 @@ class QtApplicationTests(unittest.TestCase):
 
             with patch("qt_app.main_window.subprocess.Popen") as open_location:
                 LineTrackerQtWindow.open_schedule_location(window)
-
-        open_location.assert_called_once_with(["explorer.exe", "/select,", str(schedule_path)])
+                open_location.assert_called_once()
+                command = open_location.call_args.args[0]
+                self.assertEqual(command[:2], ["explorer.exe", "/select,"])
+                self.assertTrue(Path(command[2]).samefile(schedule_path))
 
     def test_schedule_view_renders_directive_document(self) -> None:
         from line_tracker_schedule import SCHEDULE_STATUS_DONE, ScheduleDocument, ScheduleItem
@@ -311,10 +313,12 @@ class QtApplicationTests(unittest.TestCase):
             patch.object(window, "_render_graph") as render_graph,
             patch.object(window, "refresh") as refresh,
             patch.object(window, "_rebuild_ui") as rebuild_ui,
+            patch.object(window, "_save_settings", return_value=True) as save_settings,
             patch.object(window.refresh_coordinator, "invalidate") as invalidate,
         ):
             window.open_settings(3)
 
+        save_settings.assert_called_once()
         render_graph.assert_called_once_with(snapshot)
         refresh.assert_not_called()
         rebuild_ui.assert_not_called()
