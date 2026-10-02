@@ -1896,7 +1896,19 @@ def format_output_lines(result: TrackerResult) -> list[str]:
 atexit.register(_save_cache)
 
 
+def configure_console_output() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if not callable(reconfigure):
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            pass
+
+
 def main() -> int:
+    configure_console_output()
     parser = make_parser()
     args = parser.parse_args()
     repo = find_repo_root(Path(args.repo))

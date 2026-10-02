@@ -1,4 +1,5 @@
 import datetime as dt
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,7 +11,7 @@ APP_DIR = Path(__file__).resolve().parents[1] / "app"
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
-from line_tracker import TrackerConfig, get_commit_detail
+from line_tracker import TrackerConfig, configure_console_output, get_commit_detail
 from line_tracker_authors import build_author_option_entries, parse_shortlog_identities
 from line_tracker_controller import RefreshCoordinator
 from line_tracker_graph import flatten_graph_points, smooth_graph_points, summarize_graph_values
@@ -21,6 +22,24 @@ from line_tracker_settings import UISettings, load_ui_settings, save_ui_settings
 
 
 class ApplicationBoundaryTests(unittest.TestCase):
+    def test_console_output_is_utf8_safe_on_western_windows(self) -> None:
+        stdout_bytes = io.BytesIO()
+        stderr_bytes = io.BytesIO()
+        stdout = io.TextIOWrapper(stdout_bytes, encoding="cp1252")
+        stderr = io.TextIOWrapper(stderr_bytes, encoding="cp1252")
+
+        with patch.object(sys, "stdout", stdout), patch.object(sys, "stderr", stderr):
+            configure_console_output()
+            print("오늘 날짜")
+            print("오류", file=sys.stderr)
+            stdout.flush()
+            stderr.flush()
+
+        self.assertEqual(stdout_bytes.getvalue().decode("utf-8").splitlines(), ["오늘 날짜"])
+        self.assertEqual(stderr_bytes.getvalue().decode("utf-8").splitlines(), ["오류"])
+        stdout.detach()
+        stderr.detach()
+
     def test_commit_detail_parses_metadata_text_and_binary_file_changes(self) -> None:
         metadata = (
             "fullhash\x00abc1234\x002026-08-04T21:30:00+09:00\x00Groun\x00groun@example.com\x00"
