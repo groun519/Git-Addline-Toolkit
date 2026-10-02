@@ -269,11 +269,21 @@ class QtApplicationTests(unittest.TestCase):
         window = LineTrackerQtWindow(args, capture_mode=True)
         window.repo = Path.cwd().resolve()
         window.repo_selected = True
+        window.author_raw = "auto"
+        window.goal = 90_000
         window.settings = replace(
             window.settings,
             repo_path=str(window.repo),
-            author=window.author_raw,
+            goal=window.goal,
+            author="auto",
             author_display="auto",
+            custom_today_enabled=False,
+            auto_refresh=False,
+            graph_show_additions=True,
+            graph_show_deletions=False,
+            graph_show_commits=False,
+            graph_languages=("C++",),
+            graph_curve=35.0,
         )
         snapshot = Mock()
         window.last_snapshot = snapshot
@@ -287,7 +297,7 @@ class QtApplicationTests(unittest.TestCase):
             author_raw=window.author_raw,
             author_display="auto",
             auto_refresh=bool(window.settings.auto_refresh),
-            graph_days="30" if window.settings.graph_days != "30" else "60",
+            graph_days="30",
             graph_show_additions=bool(window.settings.graph_show_additions),
             graph_show_deletions=bool(window.settings.graph_show_deletions),
             graph_show_commits=bool(window.settings.graph_show_commits),

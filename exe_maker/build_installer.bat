@@ -38,17 +38,19 @@ if exist "%ROOT%\.venv\Scripts\python.exe" set "PY_EXE=%ROOT%\.venv\Scripts\pyth
 if not defined PY_EXE if exist "%BUILD_VENV%\Scripts\python.exe" set "PY_EXE=%BUILD_VENV%\Scripts\python.exe"
 
 if not defined PY_EXE (
-  py -3 -V >nul 2>nul
+  python -V >nul 2>nul
   if not errorlevel 1 (
-    set "PY_CMD=py"
-    set "PY_ARGS=-3"
+    set "PY_CMD=python"
   )
 )
 
 if not defined PY_EXE (
   if not defined PY_CMD (
-    python -V >nul 2>nul
-    if not errorlevel 1 set "PY_CMD=python"
+    py -3 -V >nul 2>nul
+    if not errorlevel 1 (
+      set "PY_CMD=py"
+      set "PY_ARGS=-3"
+    )
   )
 
   if not defined PY_CMD (
