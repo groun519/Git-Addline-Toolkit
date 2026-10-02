@@ -73,8 +73,8 @@ Current app version is managed by [VERSION](/c:/Users/groun/Documents/git-reposi
   위 BAT를 콘솔 없이 실행하는 래퍼입니다.
 - [app/line_tracker_ui.pyw](/c:/Users/groun/Documents/git-repositories/PROJECT-MA/tools/Git-Addline-Toolkit/app/line_tracker_ui.pyw)
   GUI 진입점입니다.
-- [app/line_tracker_ui.py](/c:/Users/groun/Documents/git-repositories/PROJECT-MA/tools/Git-Addline-Toolkit/app/line_tracker_ui.py)
-  메인 UI 셸입니다.
+- [app/qt_app/main_window.py](/c:/Users/groun/Documents/git-repositories/PROJECT-MA/tools/Git-Addline-Toolkit/app/qt_app/main_window.py)
+  PySide6 메인 UI 셸입니다.
 - [app/line_tracker.py](/c:/Users/groun/Documents/git-repositories/PROJECT-MA/tools/Git-Addline-Toolkit/app/line_tracker.py)
   Git 집계 엔진과 CLI입니다.
 - [exe_maker/dist/LineTrackerSetup.exe](/c:/Users/groun/Documents/git-repositories/PROJECT-MA/tools/Git-Addline-Toolkit/exe_maker/dist/LineTrackerSetup.exe)
@@ -149,7 +149,8 @@ python -m pip install -r requirements.txt
 python app\line_tracker_ui.pyw --repo C:\path\to\repo
 ```
 
-이전 Tk UI가 필요한 경우 `python app\line_tracker_tk.pyw`로 실행할 수 있습니다.
+Git 명령은 기본 180초 안에 끝나지 않으면 중단됩니다. 매우 큰 리포지토리에서 상한을 조정해야 하면
+`LINE_TRACKER_GIT_TIMEOUT_SECONDS` 환경 변수에 초 단위 값을 지정할 수 있습니다.
 
 ## Build Installer
 

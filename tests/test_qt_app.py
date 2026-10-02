@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 
@@ -50,6 +52,51 @@ class QtApplicationTests(unittest.TestCase):
 
         self.assertEqual(language_color("JSON", language_order), LANGUAGE_COLORS[2])
         self.assertEqual(language_color("JSON", language_order), "#6f9fd8")
+
+    def test_language_progress_tooltip_only_opens_over_colored_segment(self) -> None:
+        from line_tracker_theme import get_theme_palette
+        from qt_app.theme import build_theme_tokens
+        from qt_app.widgets import LanguageProgressBar
+
+        progress = LanguageProgressBar()
+        progress.resize(400, 24)
+        progress.set_theme_tokens(build_theme_tokens(get_theme_palette("forest")))
+        progress.set_progress(50.0, "50 / 100 [50%]", {"C++": 30, "JSON": 20})
+        progress.show()
+        progress.grab()
+        self.app.processEvents()
+
+        with (
+            patch("qt_app.widgets.QToolTip.showText") as show_tooltip,
+            patch("qt_app.widgets.QToolTip.hideText") as hide_tooltip,
+        ):
+            QTest.mouseMove(progress, QPoint(20, 12))
+            show_tooltip.assert_called_once()
+            QTest.mouseMove(progress, QPoint(350, 12))
+            hide_tooltip.assert_called_once()
+
+        progress.close()
+
+    def test_schedule_location_opens_selected_file_in_explorer(self) -> None:
+        from line_tracker_settings import UISettings
+        from qt_app.main_window import LineTrackerQtWindow
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            repo = Path(tmp_dir)
+            schedule_path = repo / "docs" / "SCHEDULE.md"
+            schedule_path.parent.mkdir()
+            schedule_path.write_text("@@BACKLOG", encoding="utf-8")
+            window = SimpleNamespace(
+                repo_selected=True,
+                repo=repo,
+                settings=UISettings(schedule_path="docs/SCHEDULE.md"),
+                t=lambda key: key,
+            )
+
+            with patch("qt_app.main_window.subprocess.Popen") as open_location:
+                LineTrackerQtWindow.open_schedule_location(window)
+
+        open_location.assert_called_once_with(["explorer.exe", "/select,", str(schedule_path)])
 
     def test_schedule_view_renders_directive_document(self) -> None:
         from line_tracker_schedule import SCHEDULE_STATUS_DONE, ScheduleDocument, ScheduleItem

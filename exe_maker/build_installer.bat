@@ -99,7 +99,6 @@ set "PATH=%PY_HOME%;%SystemRoot%\System32;%SystemRoot%;%SystemRoot%\System32\Wbe
 if exist "%ICON_FILE%" (
   "%PY_EXE%" -m PyInstaller --noconfirm --clean --noconsole ^
     --name "LineTracker" ^
-    --exclude-module tkinter ^
     --icon "%ICON_FILE%" ^
     --add-data "%ROOT%\VERSION;." ^
     --add-data "%ROOT%\assets;assets" ^
@@ -110,7 +109,6 @@ if exist "%ICON_FILE%" (
 ) else (
   "%PY_EXE%" -m PyInstaller --noconfirm --clean --noconsole ^
     --name "LineTracker" ^
-    --exclude-module tkinter ^
     --add-data "%ROOT%\VERSION;." ^
     --distpath "%DIST_ROOT%" ^
     --workpath "%BUILD_ROOT%" ^

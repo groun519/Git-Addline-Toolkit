@@ -15,6 +15,7 @@ from line_tracker_authors import build_author_option_entries, parse_shortlog_ide
 from line_tracker_controller import RefreshCoordinator
 from line_tracker_graph import flatten_graph_points, smooth_graph_points, summarize_graph_values
 from line_tracker_presenters import build_progress_presentation
+from line_tracker_process import CommandCancelledError, raise_if_command_cancelled
 from line_tracker_repository import find_repo_root_from_metadata
 from line_tracker_settings import UISettings, load_ui_settings, save_ui_settings
 
@@ -182,6 +183,43 @@ class ApplicationBoundaryTests(unittest.TestCase):
         pending.pop(0)()
 
         success.assert_not_called()
+        self.assertFalse(coordinator.is_running)
+
+    def test_refresh_coordinator_cancels_invalidated_worker_commands(self) -> None:
+        worker_targets: list[object] = []
+        pending: list[object] = []
+        failure = Mock()
+        cancellation_observed: list[bool] = []
+
+        def builder(*_args: object) -> object:
+            try:
+                raise_if_command_cancelled()
+            except CommandCancelledError:
+                cancellation_observed.append(True)
+                raise
+            return sentinel.snapshot
+
+        coordinator = RefreshCoordinator(
+            pending.append,
+            snapshot_builder=builder,
+            thread_starter=worker_targets.append,
+        )
+        config = TrackerConfig(repo=Path("C:/repo"))
+        coordinator.start(
+            repo=config.repo,
+            author="me",
+            config=config,
+            graph_days=14,
+            on_success=Mock(),
+            on_failure=failure,
+        )
+
+        coordinator.invalidate()
+        with patch.object(coordinator, "_dispatch", side_effect=lambda callback: callback()):
+            worker_targets.pop(0)()
+
+        self.assertEqual(cancellation_observed, [True])
+        failure.assert_not_called()
         self.assertFalse(coordinator.is_running)
 
 

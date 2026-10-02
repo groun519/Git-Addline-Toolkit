@@ -48,6 +48,7 @@ from line_tracker_controller import RefreshCoordinator
 from line_tracker_graph import summarize_graph_values
 from line_tracker_authors import build_author_option_entries, parse_author_identity, parse_shortlog_identities
 from line_tracker_presenters import StatSectionPresentation, build_dashboard_presentation, build_progress_presentation
+from line_tracker_process import command_cancel_scope
 from line_tracker_refresh import RefreshSnapshot
 from line_tracker_repository import find_repo_root_from_metadata, resolve_valid_repo
 from line_tracker_schedule import (
@@ -91,6 +92,12 @@ from qt_app.widgets import (
     WindowTitleBar,
     complete_language_order,
     language_color,
+)
+from qt_app.window_state import (
+    coerce_graph_days as _coerce_graph_days,
+    coerce_positive_int as _coerce_positive_int,
+    parse_geometry as _parse_geometry,
+    parse_saved_today as _parse_saved_today,
 )
 
 
@@ -154,6 +161,7 @@ class LineTrackerQtWindow(QMainWindow):
         self.schedule_editor = ScheduleDocumentEditor(self.schedule_parser)
         self.schedule_mtime_ns: int | None = None
         self.commit_history_generation = 0
+        self.commit_history_cancel_event: threading.Event | None = None
         self.commit_history_refs = ("HEAD",)
         self.commit_history_exclude_ref = ""
 
@@ -543,6 +551,7 @@ class LineTrackerQtWindow(QMainWindow):
         ):
             return
         self.refresh_coordinator.invalidate()
+        self._cancel_commit_history_load()
         self.repo = repo
         self.repo_selected = True
         self.author = resolve_author(repo, self.author_raw)
@@ -1025,7 +1034,7 @@ class LineTrackerQtWindow(QMainWindow):
         if not self._save_settings(notify=True, candidate=next_settings):
             return
         self.refresh_coordinator.invalidate()
-        self.commit_history_generation += 1
+        self._cancel_commit_history_load()
         self.repo = repo or Path(values.repo_path or self.args.repo).resolve()
         self.repo_selected = repo is not None
         self.lang = values.lang
@@ -1082,7 +1091,7 @@ class LineTrackerQtWindow(QMainWindow):
         history_refs: tuple[str, ...] = (),
         history_exclude_ref: str = "",
     ) -> None:
-        self.commit_history_generation += 1
+        self._cancel_commit_history_load()
         self.history_view.reset()
         if not self.repo_selected:
             return
@@ -1110,17 +1119,20 @@ class LineTrackerQtWindow(QMainWindow):
         exclude_ref = self.commit_history_exclude_ref
         limit = 40
         self.history_view.set_loading(True)
+        cancel_event = threading.Event()
+        self.commit_history_cancel_event = cancel_event
 
         def worker() -> None:
             try:
-                entries = get_commit_change_entries(
-                    repo,
-                    author,
-                    refs,
-                    exclude_ref=exclude_ref or None,
-                    limit=limit,
-                    skip=skip,
-                )
+                with command_cancel_scope(cancel_event):
+                    entries = get_commit_change_entries(
+                        repo,
+                        author,
+                        refs,
+                        exclude_ref=exclude_ref or None,
+                        limit=limit,
+                        skip=skip,
+                    )
             except (OSError, RuntimeError):
                 entries = []
             self.dispatcher.dispatch(
@@ -1144,7 +1156,14 @@ class LineTrackerQtWindow(QMainWindow):
     def _on_commit_history_page(self, generation: int, entries, exhausted: bool) -> None:
         if generation != self.commit_history_generation:
             return
+        self.commit_history_cancel_event = None
         self.history_view.append_entries(entries, exhausted=exhausted)
+
+    def _cancel_commit_history_load(self) -> None:
+        if self.commit_history_cancel_event is not None:
+            self.commit_history_cancel_event.set()
+            self.commit_history_cancel_event = None
+        self.commit_history_generation += 1
 
     def enter_compact_mode(self) -> None:
         if self.overlay is not None:
@@ -1252,7 +1271,7 @@ class LineTrackerQtWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         self.refresh_coordinator.invalidate()
-        self.commit_history_generation += 1
+        self._cancel_commit_history_load()
         self.initial_refresh_timer.stop()
         self.initial_schedule_timer.stop()
         self.auto_refresh_timer.stop()
@@ -1263,38 +1282,3 @@ class LineTrackerQtWindow(QMainWindow):
         QApplication.instance().removeEventFilter(self)
         self._save_settings()
         super().closeEvent(event)
-
-
-def _coerce_positive_int(value: object, default: int) -> int:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return default
-    return parsed if parsed > 0 else default
-
-
-def _coerce_graph_days(value: object) -> int:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return 30
-    return min(max(parsed, 1), 365)
-
-
-def _parse_saved_today(settings: UISettings, fallback: dt.date | None) -> dt.date | None:
-    if not settings.custom_today_enabled:
-        return fallback
-    try:
-        return dt.date.fromisoformat(settings.custom_today)
-    except ValueError:
-        return fallback
-
-
-def _parse_geometry(value: str) -> tuple[int, int, int | None, int | None] | None:
-    import re
-
-    match = re.fullmatch(r"(\d+)x(\d+)(?:\+(-?\d+)\+(-?\d+))?", value.strip())
-    if match is None:
-        return None
-    width, height, x_pos, y_pos = match.groups()
-    return int(width), int(height), int(x_pos) if x_pos else None, int(y_pos) if y_pos else None

@@ -5,6 +5,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from line_tracker import TrackerConfig
+from line_tracker_process import command_cancel_scope
 from line_tracker_refresh import RefreshSnapshot, build_refresh_snapshot
 
 
@@ -29,6 +30,7 @@ class RefreshCoordinator:
         self._lock = threading.Lock()
         self._next_request_id = 0
         self._active_request_id: int | None = None
+        self._active_cancel_event: threading.Event | None = None
 
     @property
     def is_running(self) -> bool:
@@ -51,10 +53,13 @@ class RefreshCoordinator:
             self._next_request_id += 1
             request_id = self._next_request_id
             self._active_request_id = request_id
+            cancel_event = threading.Event()
+            self._active_cancel_event = cancel_event
 
         def run() -> None:
             try:
-                snapshot = self._snapshot_builder(repo, author, config, graph_days)
+                with command_cancel_scope(cancel_event):
+                    snapshot = self._snapshot_builder(repo, author, config, graph_days)
             except Exception as exc:  # pragma: no cover - exercised through injected builders
                 self._dispatch(
                     lambda error_message=str(exc): self._deliver_failure(
@@ -75,8 +80,11 @@ class RefreshCoordinator:
 
     def invalidate(self) -> None:
         with self._lock:
+            if self._active_cancel_event is not None:
+                self._active_cancel_event.set()
             self._next_request_id += 1
             self._active_request_id = None
+            self._active_cancel_event = None
 
     def _deliver_success(
         self,
@@ -101,6 +109,7 @@ class RefreshCoordinator:
             if self._active_request_id != request_id:
                 return False
             self._active_request_id = None
+            self._active_cancel_event = None
             return True
 
 

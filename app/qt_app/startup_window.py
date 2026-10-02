@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import datetime as dt
 import threading
 from dataclasses import replace
 from pathlib import Path
@@ -21,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from line_tracker import TrackerConfig, get_app_state_path, get_legacy_state_path
+from line_tracker_process import command_cancel_scope
 from line_tracker_repository import find_repo_root_from_metadata, resolve_valid_repo
 from line_tracker_settings import SETTINGS_FILE_NAME, UISettings, load_ui_settings, save_ui_settings
 from line_tracker_startup import StartupPayload, build_startup_payload
@@ -29,6 +29,11 @@ from line_tracker_ui_resources import TEXT
 from line_tracker_version import APP_NAME, APP_VERSION
 from qt_app.theme import build_stylesheet, build_theme_tokens
 from qt_app.widgets import WindowTitleBar
+from qt_app.window_state import (
+    coerce_graph_days as _coerce_graph_days,
+    coerce_positive_int as _coerce_positive_int,
+    parse_saved_today as _parse_saved_today,
+)
 
 
 class StartupWindow(QFrame):
@@ -56,6 +61,7 @@ class StartupWindow(QFrame):
         self.repo: Path | None = None
         self._generation = 0
         self._loading = False
+        self._cancel_event: threading.Event | None = None
         self._stage_text = ""
         self._dot_count = 0
 
@@ -212,6 +218,8 @@ class StartupWindow(QFrame):
         self._generation += 1
         generation = self._generation
         self._loading = True
+        cancel_event = threading.Event()
+        self._cancel_event = cancel_event
         self.heading.setText(self.t("startup_loading_title"))
         self.select_button.setEnabled(False)
         self.select_button.show()
@@ -230,13 +238,14 @@ class StartupWindow(QFrame):
 
         def worker() -> None:
             try:
-                payload = build_startup_payload(
-                    repo,
-                    settings,
-                    config,
-                    graph_days,
-                    progress=lambda value, stage: self._progress_received.emit(generation, value, stage),
-                )
+                with command_cancel_scope(cancel_event):
+                    payload = build_startup_payload(
+                        repo,
+                        settings,
+                        config,
+                        graph_days,
+                        progress=lambda value, stage: self._progress_received.emit(generation, value, stage),
+                    )
             except Exception as exc:
                 self._load_failed.emit(generation, str(exc))
                 return
@@ -270,6 +279,7 @@ class StartupWindow(QFrame):
         if generation != self._generation or not self._loading:
             return
         self._loading = False
+        self._cancel_event = None
         self.activity_timer.stop()
         self.progress.setValue(100)
         self.progress_value.setText("100%")
@@ -281,6 +291,7 @@ class StartupWindow(QFrame):
         if generation != self._generation:
             return
         self._loading = False
+        self._cancel_event = None
         self.activity_timer.stop()
         self.heading.setText(self.t("startup_failed_title"))
         self.status.setText(self.t("startup_failed_hint", error=message))
@@ -303,32 +314,10 @@ class StartupWindow(QFrame):
         self.status.setText(f"{self._stage_text}{'.' * self._dot_count}")
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        if self._cancel_event is not None:
+            self._cancel_event.set()
+            self._cancel_event = None
         self._generation += 1
         self._loading = False
         self.activity_timer.stop()
         super().closeEvent(event)
-
-
-def _coerce_positive_int(value: object, default: int) -> int:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return default
-    return parsed if parsed > 0 else default
-
-
-def _coerce_graph_days(value: object) -> int:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return 30
-    return min(max(parsed, 1), 365)
-
-
-def _parse_saved_today(settings: UISettings, fallback: dt.date | None) -> dt.date | None:
-    if not settings.custom_today_enabled:
-        return fallback
-    try:
-        return dt.date.fromisoformat(settings.custom_today)
-    except ValueError:
-        return fallback

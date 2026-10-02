@@ -4,47 +4,15 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 import sys
-from unittest.mock import Mock, patch
 
 APP_DIR = Path(__file__).resolve().parents[1] / "app"
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
 from line_tracker import encode_author_patterns
-from line_tracker_settings import classify_settings_change
-from line_tracker_ui import LineTrackerApp, UISettings
-
-
-class _FakeRoot:
-    def __init__(self, screen_width: int = 1600) -> None:
-        self._screen_width = screen_width
-
-    def winfo_screenwidth(self) -> int:
-        return self._screen_width
-
-
-class _FakeGeometryApp:
-    _parse_geometry = staticmethod(LineTrackerApp._parse_geometry)
-
-    def __init__(self, screen_width: int = 1600) -> None:
-        self.root = _FakeRoot(screen_width)
-
-
-class _FakeSettingsApp:
-    def __init__(self, settings_path: Path, legacy_settings_path: Path) -> None:
-        self.settings_path = settings_path
-        self.legacy_settings_path = legacy_settings_path
-
-
-class _FakeScheduleLocationApp:
-    def __init__(self, repo: Path, schedule_path: str) -> None:
-        self.repo = repo
-        self.schedule_path = schedule_path
-        self.show_error = Mock()
-
-    @staticmethod
-    def t(key: str) -> str:
-        return key
+from line_tracker_authors import build_author_option_entries
+from line_tracker_settings import UISettings, classify_settings_change, load_ui_settings
+from qt_app.window_state import parse_geometry
 
 
 class SettingsTests(unittest.TestCase):
@@ -64,22 +32,8 @@ class SettingsTests(unittest.TestCase):
             "application",
         )
 
-    def test_open_schedule_location_opens_selected_file_parent(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            repo = Path(tmp_dir)
-            schedule_path = repo / "docs" / "SCHEDULE.md"
-            schedule_path.parent.mkdir()
-            schedule_path.write_text("@@BACKLOG", encoding="utf-8")
-            app = _FakeScheduleLocationApp(repo, "docs/SCHEDULE.md")
-
-            with patch("line_tracker_ui.os.startfile") as open_location:
-                LineTrackerApp.open_schedule_location(app)
-
-        open_location.assert_called_once_with(str(schedule_path.parent))
-        app.show_error.assert_not_called()
-
     def test_build_author_option_entries_deduplicates_same_email_targets(self) -> None:
-        options, mapping, aliases = LineTrackerApp._build_author_option_entries(
+        options, mapping, aliases = build_author_option_entries(
             [
                 "Alice <alice@example.com>",
                 "Alice Kim <alice@example.com>",
@@ -97,7 +51,7 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(aliases["Alice\\ Kim\\ <alice@example\\.com>"], "Alice <alice@example.com>")
 
     def test_build_author_option_entries_merges_matching_github_noreply_and_primary_email(self) -> None:
-        options, mapping, aliases = LineTrackerApp._build_author_option_entries(
+        options, mapping, aliases = build_author_option_entries(
             [
                 "groun519 <54619610+groun519@users.noreply.github.com>",
                 "groun519 <groun519@gmail.com>",
@@ -229,8 +183,7 @@ class SettingsTests(unittest.TestCase):
             legacy_path = tmp_path / "legacy.json"
             legacy_path.write_text(json.dumps({"lang": "en", "repo_path": "C:/legacy"}), encoding="utf-8")
 
-            app = _FakeSettingsApp(tmp_path / "current.json", legacy_path)
-            settings = LineTrackerApp.load_settings(app)
+            settings = load_ui_settings(tmp_path / "current.json", legacy_path)
 
         self.assertEqual(settings.lang, "en")
         self.assertEqual(settings.repo_path, "C:/legacy")
@@ -241,16 +194,11 @@ class SettingsTests(unittest.TestCase):
             current_path = tmp_path / "current.json"
             current_path.write_text("{invalid", encoding="utf-8")
 
-            app = _FakeSettingsApp(current_path, tmp_path / "legacy.json")
-            settings = LineTrackerApp.load_settings(app)
+            settings = load_ui_settings(current_path, tmp_path / "legacy.json")
 
         self.assertEqual(settings, UISettings())
 
-    def test_normalize_geometry_clamps_and_strips_invalid_position(self) -> None:
-        app = _FakeGeometryApp(screen_width=1600)
-
-        normalized_small = LineTrackerApp.normalize_geometry(app, "1x1+0+0")
-        normalized_wide = LineTrackerApp.normalize_geometry(app, "2000x700+10+20")
-
-        self.assertEqual(normalized_small, "1100x675")
-        self.assertEqual(normalized_wide, "1520x700+10+20")
+    def test_parse_geometry_preserves_valid_size_and_position(self) -> None:
+        self.assertEqual(parse_geometry("1x1+0+0"), (1, 1, 0, 0))
+        self.assertEqual(parse_geometry("2000x700+10+20"), (2000, 700, 10, 20))
+        self.assertIsNone(parse_geometry("not-a-geometry"))

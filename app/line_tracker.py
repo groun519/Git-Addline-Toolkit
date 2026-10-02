@@ -10,7 +10,6 @@ import math
 import os
 import re
 import shutil
-import subprocess
 import sys
 import threading
 from collections.abc import Sequence
@@ -18,6 +17,19 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from line_tracker_io import write_text_atomic
+from line_tracker_process import CommandTimeoutError, run_command
+from line_tracker_text import (
+    LANGUAGE_NAMES,
+    classify_text_language,
+    count_text_lines,
+    is_probably_binary_path,
+    merge_language_totals,
+    order_language_totals,
+    parse_numstat_deletions,
+    parse_numstat_insertions,
+    parse_numstat_insertions_by_date_and_language,
+    parse_numstat_insertions_by_language,
+)
 
 
 DEFAULT_GOAL = 20000
@@ -27,47 +39,6 @@ DEFAULT_AUTHOR = "auto"
 CACHE_VERSION = 7
 APP_STATE_DIR_NAME = "LineTracker"
 
-BINARY_EXTENSIONS = {
-    ".uasset",
-    ".umap",
-    ".png",
-    ".jpg",
-    ".jpeg",
-    ".bmp",
-    ".tga",
-    ".gif",
-    ".dds",
-    ".wav",
-    ".mp3",
-    ".ogg",
-    ".mp4",
-    ".mov",
-    ".avi",
-    ".zip",
-    ".7z",
-    ".rar",
-    ".bin",
-    ".exe",
-    ".dll",
-    ".so",
-    ".dylib",
-    ".pdb",
-    ".lib",
-    ".a",
-}
-LANGUAGE_EXTENSION_GROUPS: tuple[tuple[str, frozenset[str]], ...] = (
-    ("C++", frozenset({".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".inl"})),
-    ("C#", frozenset({".cs"})),
-    ("Python", frozenset({".py", ".pyw"})),
-    ("TypeScript", frozenset({".ts", ".tsx"})),
-    ("JavaScript", frozenset({".js", ".jsx", ".mjs", ".cjs"})),
-    ("JSON", frozenset({".json", ".jsonc", ".uplugin", ".uproject"})),
-    ("Shader", frozenset({".usf", ".ush", ".hlsl", ".glsl", ".vert", ".frag"})),
-    ("Config", frozenset({".ini", ".cfg", ".conf", ".toml", ".yaml", ".yml"})),
-    ("Scripts", frozenset({".ps1", ".bat", ".cmd", ".sh"})),
-    ("Docs", frozenset({".md", ".mdx", ".rst", ".txt"})),
-)
-LANGUAGE_NAMES = tuple(language for language, _extensions in LANGUAGE_EXTENSION_GROUPS) + ("Other",)
 SHORTSTAT_INSERTIONS_RE = re.compile(r"(\d+)\s+insertions?\(\+\)")
 SHORTSTAT_DELETIONS_RE = re.compile(r"(\d+)\s+deletions?\(-\)")
 
@@ -93,20 +64,6 @@ _CACHE_DIRTY = False
 _GIT_EXECUTABLE: str | None = None
 _GIT_SOURCE: str | None = None
 MULTI_AUTHOR_PREFIX = "__LT_MULTI__:"
-
-
-def _git_subprocess_kwargs() -> dict[str, object]:
-    kwargs: dict[str, object] = {
-        "capture_output": True,
-        "text": True,
-        "encoding": "utf-8",
-        "errors": "replace",
-        "check": False,
-    }
-    create_no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    if create_no_window:
-        kwargs["creationflags"] = create_no_window
-    return kwargs
 
 
 def encode_author_patterns(patterns: list[str]) -> str:
@@ -240,11 +197,8 @@ def get_git_version() -> str | None:
         return None
 
     try:
-        result = subprocess.run(
-            [git_executable, "--version"],
-            **_git_subprocess_kwargs(),
-        )
-    except OSError:
+        result = run_command([git_executable, "--version"], timeout_seconds=15)
+    except (OSError, CommandTimeoutError):
         return None
     if result.returncode != 0:
         return None
@@ -329,11 +283,7 @@ class CommitDetail:
 
 def run_git(repo: Path, args: list[str]) -> str:
     git_executable = resolve_git_executable()
-    result = subprocess.run(
-        [git_executable, *args],
-        cwd=repo,
-        **_git_subprocess_kwargs(),
-    )
+    result = run_command([git_executable, *args], cwd=repo)
     if result.returncode != 0:
         stderr = result.stderr.strip()
         raise RuntimeError(f"git {' '.join(args)} failed: {stderr}")
@@ -379,11 +329,11 @@ def find_repo_root(start: Path) -> Path:
     except FileNotFoundError:
         return start
     try:
-        result = subprocess.run(
+        result = run_command(
             [git_executable, "-C", str(start), "rev-parse", "--show-toplevel"],
-            **_git_subprocess_kwargs(),
+            timeout_seconds=15,
         )
-    except OSError:
+    except (OSError, CommandTimeoutError):
         return start
     if result.returncode != 0:
         return start
@@ -619,12 +569,12 @@ def git_ref_exists(repo: Path, ref: str) -> bool:
     except FileNotFoundError:
         return False
     try:
-        result = subprocess.run(
+        result = run_command(
             [git_executable, "show-ref", "--verify", "--quiet", ref],
             cwd=repo,
-            **_git_subprocess_kwargs(),
+            timeout_seconds=30,
         )
-    except OSError:
+    except (OSError, CommandTimeoutError):
         return False
     return result.returncode == 0
 
@@ -674,59 +624,6 @@ def get_ref_hash(repo: Path, ref: str = "HEAD") -> str:
     return run_git(repo, ["rev-parse", ref]).strip()
 
 
-def is_probably_binary_path(path_text: str) -> bool:
-    return Path(path_text).suffix.lower() in BINARY_EXTENSIONS
-
-
-def is_probably_binary_bytes(sample: bytes) -> bool:
-    return b"\x00" in sample
-
-
-def count_text_lines(path: Path) -> int:
-    try:
-        with path.open("rb") as f:
-            data = f.read()
-    except OSError:
-        return 0
-
-    if not data:
-        return 0
-    if is_probably_binary_bytes(data[:8192]):
-        return 0
-
-    lines = data.count(b"\n")
-    if not data.endswith(b"\n"):
-        lines += 1
-    return lines
-
-
-def classify_text_language(path_text: str) -> str:
-    suffix = Path(path_text).suffix.lower()
-    for language, extensions in LANGUAGE_EXTENSION_GROUPS:
-        if suffix in extensions:
-            return language
-    return "Other"
-
-
-def order_language_totals(totals: dict[str, int]) -> dict[str, int]:
-    ordered: dict[str, int] = {}
-    for language, _ in LANGUAGE_EXTENSION_GROUPS:
-        if totals.get(language, 0) > 0:
-            ordered[language] = int(totals[language])
-    if totals.get("Other", 0) > 0:
-        ordered["Other"] = int(totals["Other"])
-    return ordered
-
-
-def merge_language_totals(*language_totals: dict[str, int]) -> dict[str, int]:
-    merged: dict[str, int] = {}
-    for totals in language_totals:
-        for language, value in totals.items():
-            if value > 0:
-                merged[language] = merged.get(language, 0) + int(value)
-    return order_language_totals(merged)
-
-
 def get_project_language_lines(repo: Path) -> dict[str, int]:
     out = run_git(repo, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"])
     totals: dict[str, int] = {}
@@ -754,72 +651,6 @@ def get_worktree_tracked_text_total(repo: Path) -> int:
             continue
         total += count_text_lines(repo / path_text)
     return total
-
-
-def parse_numstat_insertions(text: str) -> int:
-    total = 0
-    for line in text.splitlines():
-        parts = line.split("\t")
-        if len(parts) < 3:
-            continue
-        added = parts[0]
-        if added.isdigit():
-            total += int(added)
-    return total
-
-
-def parse_numstat_deletions(text: str) -> int:
-    total = 0
-    for line in text.splitlines():
-        parts = line.split("\t")
-        if len(parts) < 3:
-            continue
-        removed = parts[1]
-        if removed.isdigit():
-            total += int(removed)
-    return total
-
-
-def parse_numstat_insertions_by_language(text: str) -> dict[str, int]:
-    totals: dict[str, int] = {}
-    for line in text.splitlines():
-        parts = line.split("\t", 2)
-        if len(parts) < 3 or not parts[0].isdigit():
-            continue
-        path_text = parts[2].strip()
-        if not path_text or is_probably_binary_path(path_text):
-            continue
-        language = classify_text_language(path_text)
-        totals[language] = totals.get(language, 0) + int(parts[0])
-    return order_language_totals(totals)
-
-
-def parse_numstat_insertions_by_date_and_language(
-    text: str,
-) -> dict[dt.date, dict[str, int]]:
-    daily: dict[dt.date, dict[str, int]] = {}
-    current_day: dt.date | None = None
-    for line in text.splitlines():
-        if line.startswith("@@DATE@@"):
-            try:
-                current_day = dt.date.fromisoformat(line.removeprefix("@@DATE@@").strip())
-            except ValueError:
-                current_day = None
-            if current_day is not None:
-                daily.setdefault(current_day, {})
-            continue
-        if current_day is None:
-            continue
-        parts = line.split("\t", 2)
-        if len(parts) < 3 or not parts[0].isdigit():
-            continue
-        path_text = parts[2].strip()
-        if not path_text or is_probably_binary_path(path_text):
-            continue
-        language = classify_text_language(path_text)
-        totals = daily.setdefault(current_day, {})
-        totals[language] = totals.get(language, 0) + int(parts[0])
-    return {day: order_language_totals(totals) for day, totals in daily.items()}
 
 
 def get_committed_insertions_by_language(

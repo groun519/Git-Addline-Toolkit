@@ -5,11 +5,10 @@ activate the window, add a taskbar entry, move the pointer, or save UI settings.
 
 ```powershell
 python -m pip install -r devtools/requirements.txt
-python devtools/capture_ui.py --repo .
-python devtools/capture_ui.py --repo . --widget progress_section --theme harddark
-python devtools/capture_ui.py --repo . --surface settings-tracking
-python devtools/capture_ui.py --repo . --surface main-schedule-sample
-python devtools/capture_ui.py --repo . --surface compact-strip
+python devtools/capture_qt_ui.py --repo . --surface activity
+python devtools/capture_qt_ui.py --repo . --surface settings-tracking --theme harddark
+python devtools/capture_qt_ui.py --repo . --surface schedule-open
+python devtools/capture_qt_ui.py --repo . --surface overlay-strip
 ```
 
 Images are written below `build/ui-captures` by default.
