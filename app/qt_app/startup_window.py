@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QProgressBar,
     QPushButton,
     QVBoxLayout,
@@ -194,7 +195,13 @@ class StartupWindow(QFrame):
             return
         self.repo = repo
         self.settings = replace(self.settings, repo_path=str(repo))
-        save_ui_settings(self.settings_path, self.settings)
+        if not save_ui_settings(self.settings_path, self.settings):
+            QMessageBox.warning(
+                self,
+                self.t("settings_save_error_title"),
+                self.t("settings_save_error", path=str(self.settings_path)),
+            )
+            return
         self._show_repository(repo)
         self.start_loading()
 

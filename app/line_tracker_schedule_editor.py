@@ -100,6 +100,8 @@ class ScheduleDocumentEditor:
             raise ScheduleEditError("Schedule item status is invalid.")
         if not item.title.strip():
             raise ScheduleEditError("Schedule item title is required.")
+        if "|" in item.title:
+            raise ScheduleEditError("Schedule item title cannot contain '|'.")
         if "|" in item.time_range:
             raise ScheduleEditError("Schedule item time cannot contain '|'.")
 

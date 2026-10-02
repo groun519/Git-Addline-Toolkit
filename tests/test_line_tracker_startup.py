@@ -63,7 +63,7 @@ class StartupPayloadTests(unittest.TestCase):
         load_history.assert_called_once_with(
             repo,
             "resolved-author",
-            "feature/startup",
+            ("feature/startup",),
             exclude_ref="basehash",
             limit=40,
         )

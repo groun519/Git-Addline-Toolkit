@@ -132,7 +132,7 @@ class ScheduleItemDialog(QDialog):
         if not self.id_edit.text().strip() or not self.title_edit.text().strip():
             QMessageBox.warning(self, self.t("schedule_edit_error_title"), self.t("schedule_required_error"))
             return
-        if "|" in self.id_edit.text() or "|" in self.time_edit.text():
+        if "|" in self.id_edit.text() or "|" in self.title_edit.text() or "|" in self.time_edit.text():
             QMessageBox.warning(self, self.t("schedule_edit_error_title"), self.t("schedule_invalid_separator"))
             return
         self.accept()

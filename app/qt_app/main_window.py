@@ -154,7 +154,7 @@ class LineTrackerQtWindow(QMainWindow):
         self.schedule_editor = ScheduleDocumentEditor(self.schedule_parser)
         self.schedule_mtime_ns: int | None = None
         self.commit_history_generation = 0
-        self.commit_history_ref = "HEAD"
+        self.commit_history_refs = ("HEAD",)
         self.commit_history_exclude_ref = ""
 
         saved_repo = find_repo_root_from_metadata(Path(self.settings.repo_path)) if self.settings.repo_path else None
@@ -542,7 +542,7 @@ class LineTrackerQtWindow(QMainWindow):
         self.repo_selected = True
         self.author = resolve_author(repo, self.author_raw)
         self._update_repo_header()
-        self._save_settings()
+        self._save_settings(notify=True)
         self._load_schedule(force=True)
         self.refresh()
 
@@ -645,6 +645,8 @@ class LineTrackerQtWindow(QMainWindow):
                 tracked_ref=snapshot.tracked_ref,
                 current_ref=snapshot.current_ref,
                 base_ref=snapshot.base_ref,
+                history_refs=snapshot.history_refs,
+                history_exclude_ref=snapshot.history_exclude_ref,
             )
         self._update_overlay()
 
@@ -725,13 +727,18 @@ class LineTrackerQtWindow(QMainWindow):
             )
         graph_summary = " | ".join(summary_items) if summary_items else self.t("graph_summary_empty")
         if self.activity_graph.uses_adaptive_axis:
-            graph_summary = f"{graph_summary}  |  {self.t('graph_scale_adaptive')}"
+            scale_label = self.t("graph_scale_adaptive").replace(" ", "\u00a0")
+            graph_summary = f"{graph_summary}  |  {scale_label}"
         self.graph_summary.setText(graph_summary)
 
     def _apply_startup_payload(self, payload: StartupPayload) -> None:
         self._on_refresh_success(0, payload.snapshot, load_history=False)
-        self.commit_history_ref = payload.snapshot.current_ref or payload.snapshot.tracked_ref
-        self.commit_history_exclude_ref = payload.snapshot.base_ref
+        self.commit_history_refs = payload.snapshot.history_refs or (
+            payload.snapshot.current_ref or payload.snapshot.tracked_ref,
+        )
+        self.commit_history_exclude_ref = (
+            payload.snapshot.history_exclude_ref or payload.snapshot.base_ref
+        )
         self.history_view.reset()
         if payload.history_error:
             self.history_view.show_error(payload.history_error)
@@ -819,7 +826,7 @@ class LineTrackerQtWindow(QMainWindow):
             return
         stored_path = make_portable_schedule_path(self.repo, path) if self.repo_selected else str(path.resolve())
         self.settings = replace(self.settings, schedule_path=stored_path)
-        self._save_settings()
+        self._save_settings(notify=True)
         self._load_schedule(force=True)
 
     def _load_schedule(self, *, force: bool = False) -> None:
@@ -1002,7 +1009,8 @@ class LineTrackerQtWindow(QMainWindow):
         change_scope = classify_settings_change(previous_settings, next_settings)
         if change_scope in {"none", "graph_render"}:
             self.settings = next_settings
-            self._save_settings()
+            if not self._save_settings(notify=True):
+                return
             if restart_requested:
                 self._restart_application()
             elif change_scope == "graph_render" and self.last_snapshot is not None:
@@ -1031,7 +1039,8 @@ class LineTrackerQtWindow(QMainWindow):
         self.settings = next_settings
         self._rebuild_ui()
         self._configure_timers()
-        self._save_settings()
+        if not self._save_settings(notify=True):
+            return
         self._load_schedule(force=True)
         if restart_requested:
             self._restart_application()
@@ -1066,6 +1075,8 @@ class LineTrackerQtWindow(QMainWindow):
         tracked_ref: str = "",
         current_ref: str = "",
         base_ref: str = "",
+        history_refs: tuple[str, ...] = (),
+        history_exclude_ref: str = "",
     ) -> None:
         self.commit_history_generation += 1
         self.history_view.reset()
@@ -1077,11 +1088,11 @@ class LineTrackerQtWindow(QMainWindow):
                 current_ref = resolve_current_ref(self.repo)
                 base_ref = resolve_base_commit(self.repo, today, self.base_commit, tracked_ref)
             except (OSError, RuntimeError):
-                self.commit_history_ref = "HEAD"
+                self.commit_history_refs = ("HEAD",)
                 self.commit_history_exclude_ref = ""
                 return
-        self.commit_history_ref = current_ref or tracked_ref
-        self.commit_history_exclude_ref = base_ref
+        self.commit_history_refs = history_refs or (current_ref or tracked_ref,)
+        self.commit_history_exclude_ref = history_exclude_ref or base_ref
         self.load_next_commit_history_page()
 
     def load_next_commit_history_page(self) -> None:
@@ -1091,7 +1102,7 @@ class LineTrackerQtWindow(QMainWindow):
         skip = len(self.history_view.entries)
         repo = self.repo
         author = self.author
-        ref = self.commit_history_ref
+        refs = self.commit_history_refs
         exclude_ref = self.commit_history_exclude_ref
         limit = 40
         self.history_view.set_loading(True)
@@ -1101,7 +1112,7 @@ class LineTrackerQtWindow(QMainWindow):
                 entries = get_commit_change_entries(
                     repo,
                     author,
-                    ref,
+                    refs,
                     exclude_ref=exclude_ref or None,
                     limit=limit,
                     skip=skip,
@@ -1205,9 +1216,9 @@ class LineTrackerQtWindow(QMainWindow):
             max_y = screen.bottom() - self.height() + 1
             self.move(min(max(x_pos, screen.left()), max_x), min(max(y_pos, screen.top()), max_y))
 
-    def _save_settings(self) -> None:
+    def _save_settings(self, *, notify: bool = False) -> bool:
         if self.capture_mode:
-            return
+            return True
         geometry = f"{self.width()}x{self.height()}+{self.x()}+{self.y()}"
         self.settings = replace(
             self.settings,
@@ -1217,7 +1228,14 @@ class LineTrackerQtWindow(QMainWindow):
             goal=self.goal,
             geometry=geometry,
         )
-        save_ui_settings(self.settings_path, self.settings)
+        saved = save_ui_settings(self.settings_path, self.settings)
+        if not saved and notify:
+            QMessageBox.warning(
+                self,
+                self.t("settings_save_error_title"),
+                self.t("settings_save_error", path=str(self.settings_path)),
+            )
+        return saved
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         self.refresh_coordinator.invalidate()

@@ -12,12 +12,35 @@ APP_DIR = Path(__file__).resolve().parents[1] / "app"
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
+import line_tracker_refresh
 from line_tracker import TrackerConfig, encode_author_patterns, list_branch_refs, resolve_git_executable
 from line_tracker_presenters import build_dashboard_presentation
-from line_tracker_refresh import build_refresh_snapshot, get_branch_union_stats, includes_tracked_branch
+from line_tracker_refresh import (
+    _get_branch_activity_start,
+    build_refresh_snapshot,
+    get_branch_union_stats,
+    includes_tracked_branch,
+)
 
 
 class BranchUnionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._cache_state = (
+            dict(line_tracker_refresh._BRANCH_UNION_CACHE),
+            line_tracker_refresh._BRANCH_UNION_CACHE_LOADED,
+            line_tracker_refresh._BRANCH_UNION_CACHE_DIRTY,
+        )
+        line_tracker_refresh._BRANCH_UNION_CACHE.clear()
+        line_tracker_refresh._BRANCH_UNION_CACHE_LOADED = True
+        line_tracker_refresh._BRANCH_UNION_CACHE_DIRTY = False
+
+    def tearDown(self) -> None:
+        cache, loaded, dirty = self._cache_state
+        line_tracker_refresh._BRANCH_UNION_CACHE.clear()
+        line_tracker_refresh._BRANCH_UNION_CACHE.update(cache)
+        line_tracker_refresh._BRANCH_UNION_CACHE_LOADED = loaded
+        line_tracker_refresh._BRANCH_UNION_CACHE_DIRTY = dirty
+
     def test_other_remote_with_same_branch_name_is_not_the_tracked_branch(self) -> None:
         self.assertTrue(includes_tracked_branch("origin/develop", ("develop", "feature")))
         self.assertTrue(includes_tracked_branch("origin/develop", ("origin/develop",)))
@@ -71,6 +94,14 @@ class BranchUnionTests(unittest.TestCase):
             self.assertEqual(snapshot.repository_birth_date, dt.date(2026, 8, 31))
             self.assertEqual(snapshot.project_cumulative_lines, 3)
             self.assertEqual(snapshot.project_cumulative_deletions, 0)
+            self.assertEqual(snapshot.user_cumulative_lines, 4)
+            self.assertEqual(snapshot.user_cumulative_deletions, 0)
+            self.assertEqual(snapshot.overall_commit_count, 4)
+            self.assertEqual(snapshot.overall_active_days, 4)
+            self.assertEqual(snapshot.share_text, "100.0%")
+            self.assertEqual(snapshot.result.committed_total, 4)
+            self.assertEqual(snapshot.history_refs, ("develop", "feature"))
+            self.assertEqual(snapshot.history_exclude_ref, base_hash)
             self.assertEqual(
                 [(stat.ref, stat.additions, stat.deletions, stat.commits, stat.active_days, stat.started_on)
                  for stat in snapshot.branch_stats],
@@ -89,9 +120,9 @@ class BranchUnionTests(unittest.TestCase):
                 ["4day_suffix", "2day_suffix"],
             )
             self.assertEqual(presentation.user.title, "Alice")
-            self.assertEqual(presentation.user.added, "+3")
+            self.assertEqual(presentation.user.added, "+4")
             self.assertEqual(presentation.user.removed, "-0")
-            self.assertEqual(presentation.user.commits, "3 commit")
+            self.assertEqual(presentation.user.commits, "4 commit")
             self.assertEqual(presentation.overall.added, "+3")
             self.assertEqual(presentation.overall.removed, "-0")
             self.assertEqual(presentation.overall.commits, "3 commit")
@@ -116,6 +147,12 @@ class BranchUnionTests(unittest.TestCase):
                 repo, "", replace(config, selected_branches=("feature",)), graph_days=3
             )
             self.assertEqual(feature_snapshot.branch_total, 1)
+            self.assertEqual(feature_snapshot.user_cumulative_lines, 3)
+            self.assertEqual(feature_snapshot.overall_commit_count, 3)
+            self.assertEqual(feature_snapshot.overall_active_days, 3)
+            self.assertEqual(feature_snapshot.graph_uncommitted_insertions, 0)
+            self.assertEqual(feature_snapshot.history_refs, ("feature",))
+            self.assertEqual(feature_snapshot.history_exclude_ref, "origin/develop")
             self.assertEqual(
                 [(stat.ref, stat.additions, stat.commits) for stat in feature_snapshot.branch_stats],
                 [("feature", 1, 1)],
@@ -123,7 +160,9 @@ class BranchUnionTests(unittest.TestCase):
             self.assertEqual([value for _, value in feature_snapshot.graph_added_points], [0, 1, 0])
             self.assertEqual([value for _, value in feature_snapshot.graph_commit_points], [0, 1, 0])
             self.assertEqual(feature_snapshot.graph_uncommitted_insertions, 0)
-            self.assertEqual(feature_snapshot.result.uncommitted_insertions, 1)
+            self.assertEqual(feature_snapshot.result.uncommitted_insertions, 0)
+            self.assertEqual(feature_snapshot.today_done, 0)
+            self.assertEqual(feature_snapshot.daily_progress_language_lines, {})
 
     def test_shared_branch_commits_are_counted_once(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -156,3 +195,84 @@ class BranchUnionTests(unittest.TestCase):
             self.assertEqual(get_branch_union_stats(repo, "", "main", ("feature/a", "feature/b")), (4, 1, 2, 2))
             aliases = encode_author_patterns(["Alice", "alice@example.com"])
             self.assertEqual(get_branch_union_stats(repo, aliases, "main", ("feature/a", "feature/b")), (4, 1, 2, 2))
+
+    def test_other_selected_user_does_not_receive_local_work(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            git = resolve_git_executable()
+
+            def run(*args: str, author: str | None = None) -> str:
+                environment = os.environ.copy()
+                environment["GIT_AUTHOR_DATE"] = "2026-09-01T12:00:00+00:00"
+                environment["GIT_COMMITTER_DATE"] = environment["GIT_AUTHOR_DATE"]
+                command = [git, *args]
+                if author is not None and args and args[0] == "commit":
+                    command[2:2] = ["--author", author]
+                result = subprocess.run(
+                    command,
+                    cwd=repo,
+                    env=environment,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                return result.stdout.strip()
+
+            run("init", "-q")
+            run("config", "user.name", "Bob")
+            run("config", "user.email", "bob@example.com")
+            source = repo / "file.txt"
+            source.write_text("base\n", encoding="utf-8")
+            run("add", "file.txt")
+            run("commit", "-q", "-m", "base", author="Alice <alice@example.com>")
+            base_hash = run("rev-parse", "HEAD")
+            run("branch", "-M", "main")
+            run("switch", "-q", "-c", "feature")
+            source.write_text("base\nalice\n", encoding="utf-8")
+            run("commit", "-q", "-am", "alice work", author="Alice <alice@example.com>")
+            source.write_text("base\nalice\nbob local\n", encoding="utf-8")
+
+            config = TrackerConfig(
+                repo=repo,
+                base_commit=base_hash,
+                base_total=1,
+                author="alice@example.com",
+                ref="main",
+                today=dt.date(2026, 9, 1),
+                selected_branches=("feature",),
+            )
+            snapshot = build_refresh_snapshot(repo, config.author, config, graph_days=3)
+
+        self.assertEqual(snapshot.result.uncommitted_insertions, 0)
+        self.assertEqual(snapshot.user_cumulative_lines, 2)
+        self.assertEqual(snapshot.today_done, 1)
+
+    def test_branch_activity_start_survives_merge(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            git = resolve_git_executable()
+
+            def run(*args: str, day: str) -> None:
+                environment = os.environ.copy()
+                environment["GIT_AUTHOR_DATE"] = f"{day}T12:00:00+00:00"
+                environment["GIT_COMMITTER_DATE"] = environment["GIT_AUTHOR_DATE"]
+                subprocess.run([git, *args], cwd=repo, env=environment, check=True, capture_output=True)
+
+            run("init", "-q", day="2026-01-01")
+            run("config", "user.name", "Alice", day="2026-01-01")
+            run("config", "user.email", "alice@example.com", day="2026-01-01")
+            source = repo / "file.txt"
+            source.write_text("base\n", encoding="utf-8")
+            run("add", "file.txt", day="2026-01-01")
+            run("commit", "-q", "-m", "base", day="2026-01-01")
+            run("branch", "-M", "main", day="2026-01-01")
+            run("switch", "-q", "-c", "feature", day="2026-01-01")
+            source.write_text("base\nfeature\n", encoding="utf-8")
+            run("commit", "-q", "-am", "feature", day="2026-02-01")
+            before_merge = _get_branch_activity_start(repo, "feature", "main")
+            run("switch", "-q", "main", day="2026-02-02")
+            run("merge", "-q", "--ff-only", "feature", day="2026-02-02")
+            after_merge = _get_branch_activity_start(repo, "feature", "main")
+
+        self.assertEqual(before_merge, dt.date(2026, 2, 1))
+        self.assertEqual(after_merge, before_merge)

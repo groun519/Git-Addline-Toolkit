@@ -140,6 +140,27 @@ class ScheduleTests(unittest.TestCase):
         self.assertIn("- First detail\n- Second detail", updated)
         self.assertIn("## Completed\n| Commit | Scope |", updated)
 
+    def test_editor_rejects_title_separator_before_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "work-plan.md"
+            original = "@@BACKLOG\nITEM-001 | PLANNED | - | Original\n"
+            path.write_text(original, encoding="utf-8")
+            parser = DirectiveScheduleParser()
+            target = parser.parse(original, path).items[0]
+            replacement = type(target)(
+                item_id=target.item_id,
+                title="Invalid | title",
+                date=target.date,
+                description=target.description,
+                status=target.status,
+                time_range=target.time_range,
+            )
+
+            with self.assertRaises(ScheduleEditError):
+                ScheduleDocumentEditor(parser).update_item(path, target, replacement)
+
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
+
     def test_editor_moves_item_to_another_day_without_rewriting_document(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "work-plan.md"

@@ -104,7 +104,7 @@ def build_dashboard_presentation(
     result = snapshot.result
     lines_suffix = translate("lines_suffix")
     day_suffix = translate("day_suffix")
-    user_total = result.committed_total + result.uncommitted_insertions
+    user_total = snapshot.user_cumulative_lines
 
     return DashboardPresentation(
         date_text=result.today.isoformat(),
@@ -172,7 +172,7 @@ def build_dashboard_presentation(
         user=StatSectionPresentation(
             title=user_title,
             added=f"+{user_total:,}",
-            removed=f"-{snapshot.overall_deletions + snapshot.uncommitted_deletions:,}",
+            removed=f"-{snapshot.user_cumulative_deletions:,}",
             commits=f"{snapshot.overall_commit_count:,} commit",
             cards=(
                 StatCardPresentation(translate("user_total_label"), f"{user_total:,}{lines_suffix}"),

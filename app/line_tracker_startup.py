@@ -62,14 +62,17 @@ def build_startup_payload(
     _report(progress, 94, "history")
     history_entries: tuple[CommitChangeEntry, ...] = ()
     history_error = ""
-    history_ref = snapshot.current_ref or snapshot.tracked_ref
+    history_refs = getattr(snapshot, "history_refs", ()) or (
+        snapshot.current_ref or snapshot.tracked_ref,
+    )
+    history_exclude_ref = getattr(snapshot, "history_exclude_ref", "") or snapshot.base_ref
     try:
         history_entries = tuple(
             get_commit_change_entries(
                 repo,
                 snapshot.author,
-                history_ref,
-                exclude_ref=snapshot.base_ref or None,
+                history_refs,
+                exclude_ref=history_exclude_ref or None,
                 limit=STARTUP_HISTORY_LIMIT,
             )
         )

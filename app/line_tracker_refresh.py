@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import atexit
 import datetime as dt
+import json
 import re
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -12,6 +15,7 @@ from line_tracker import (
     TrackerResult,
     classify_text_language,
     compute_metrics,
+    daily_needed,
     decode_author_patterns,
     get_commit_active_day_count,
     get_commit_active_day_count_combined,
@@ -21,11 +25,13 @@ from line_tracker import (
     get_committed_deletions_by_date_combined,
     get_committed_insertions,
     get_committed_insertions_by_date_and_language_combined,
-    get_committed_insertions_for_date_combined,
     get_project_language_lines,
+    get_app_state_path,
+    get_ref_hash,
     get_total_deletions_up_to,
     get_total_insertions_up_to,
     get_uncommitted_deletions,
+    get_uncommitted_insertions,
     get_uncommitted_insertions_by_language,
     is_probably_binary_path,
     list_branch_refs,
@@ -33,6 +39,7 @@ from line_tracker import (
     resolve_author,
     resolve_base_commit,
     resolve_current_ref,
+    resolve_month_end,
     resolve_ref,
     run_git,
 )
@@ -82,12 +89,16 @@ class RefreshSnapshot:
     overall_progress_language_lines: dict[str, int]
     daily_progress_language_lines: dict[str, int]
     share_text: str
+    user_cumulative_lines: int
+    user_cumulative_deletions: int
     uncommitted_deletions: int
     selected_branches: tuple[str, ...] = ()
     progress_branch_total: int = 0
     daily_removed: int = 0
     graph_uncommitted_insertions: int = 0
     branch_stats: tuple[BranchStats, ...] = ()
+    history_refs: tuple[str, ...] = ()
+    history_exclude_ref: str = ""
 
 
 @dataclass(frozen=True)
@@ -110,6 +121,17 @@ class BranchCommitActivity:
     additions: int
     deletions: int
     languages: dict[str, int]
+    author_name: str = ""
+    author_email: str = ""
+
+
+_BRANCH_UNION_CACHE_VERSION = 1
+_BRANCH_UNION_CACHE_MAX = 24
+_BRANCH_UNION_CACHE_PATH = get_app_state_path("line_tracker_branch_union_cache.json")
+_BRANCH_UNION_CACHE: dict[str, dict[str, BranchCommitActivity]] = {}
+_BRANCH_UNION_CACHE_LOCK = threading.RLock()
+_BRANCH_UNION_CACHE_LOADED = False
+_BRANCH_UNION_CACHE_DIRTY = False
 
 
 @dataclass(frozen=True)
@@ -126,6 +148,90 @@ def includes_tracked_branch(tracked_ref: str, branch_refs: tuple[str, ...]) -> b
     return tracked_ref in branch_refs or local_name in branch_refs
 
 
+def _load_branch_union_cache() -> None:
+    global _BRANCH_UNION_CACHE_LOADED
+    if _BRANCH_UNION_CACHE_LOADED:
+        return
+    _BRANCH_UNION_CACHE_LOADED = True
+    try:
+        payload = json.loads(_BRANCH_UNION_CACHE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(payload, dict) or payload.get("version") != _BRANCH_UNION_CACHE_VERSION:
+        return
+    entries = payload.get("entries")
+    if not isinstance(entries, dict):
+        return
+
+    for cache_key, raw_activity in list(entries.items())[-_BRANCH_UNION_CACHE_MAX:]:
+        if not isinstance(cache_key, str) or not isinstance(raw_activity, dict):
+            continue
+        activity: dict[str, BranchCommitActivity] = {}
+        for commit_hash, raw_item in raw_activity.items():
+            if not isinstance(commit_hash, str) or not isinstance(raw_item, dict):
+                continue
+            try:
+                day = dt.date.fromisoformat(str(raw_item.get("day", "")))
+                additions = int(raw_item.get("additions", 0))
+                deletions = int(raw_item.get("deletions", 0))
+            except (TypeError, ValueError):
+                continue
+            raw_languages = raw_item.get("languages", {})
+            languages: dict[str, int] = {}
+            if isinstance(raw_languages, dict):
+                languages = {
+                    str(language): int(value)
+                    for language, value in raw_languages.items()
+                    if isinstance(value, int)
+                }
+            activity[commit_hash] = BranchCommitActivity(
+                day,
+                additions,
+                deletions,
+                languages,
+                str(raw_item.get("author_name", "")),
+                str(raw_item.get("author_email", "")),
+            )
+        _BRANCH_UNION_CACHE[cache_key] = activity
+
+
+def _save_branch_union_cache() -> None:
+    global _BRANCH_UNION_CACHE_DIRTY
+    if not _BRANCH_UNION_CACHE_DIRTY:
+        return
+    with _BRANCH_UNION_CACHE_LOCK:
+        entries = {
+            cache_key: {
+                commit_hash: {
+                    "day": item.day.isoformat(),
+                    "additions": item.additions,
+                    "deletions": item.deletions,
+                    "languages": item.languages,
+                    "author_name": item.author_name,
+                    "author_email": item.author_email,
+                }
+                for commit_hash, item in activity.items()
+            }
+            for cache_key, activity in _BRANCH_UNION_CACHE.items()
+        }
+    try:
+        _BRANCH_UNION_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _BRANCH_UNION_CACHE_PATH.write_text(
+            json.dumps(
+                {"version": _BRANCH_UNION_CACHE_VERSION, "entries": entries},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+            encoding="utf-8",
+        )
+    except OSError:
+        return
+    _BRANCH_UNION_CACHE_DIRTY = False
+
+
+atexit.register(_save_branch_union_cache)
+
+
 def get_branch_union_activity(
     repo: Path,
     author: str,
@@ -134,56 +240,165 @@ def get_branch_union_activity(
     start_day: dt.date | None = None,
     end_day: dt.date | None = None,
 ) -> dict[str, BranchCommitActivity]:
+    global _BRANCH_UNION_CACHE_DIRTY
     if not branch_refs:
         return {}
+    branch_hashes = tuple((branch, get_ref_hash(repo, branch)) for branch in branch_refs)
+    exclude_hash = get_ref_hash(repo, exclude_ref) if exclude_ref else ""
+    cache_key = json.dumps(
+        (
+            str(repo.resolve()).casefold(),
+            author,
+            branch_hashes,
+            exclude_ref or "",
+            exclude_hash,
+            start_day.isoformat() if start_day else "",
+            end_day.isoformat() if end_day else "",
+        ),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    _load_branch_union_cache()
+    with _BRANCH_UNION_CACHE_LOCK:
+        cached = _BRANCH_UNION_CACHE.get(cache_key)
+    if cached is not None:
+        return dict(cached)
+
+    patterns = decode_author_patterns(author)
+    args = [
+        "log",
+        "--date=short",
+        "--format=@@COMMIT@@%H%x09%ad%x09%an%x09%ae",
+        "--numstat",
+        "--no-renames",
+    ]
+    if start_day is not None:
+        args.append(f"--since={start_day.isoformat()} 00:00:00")
+    if end_day is not None:
+        args.append(f"--until={(end_day + dt.timedelta(days=1)).isoformat()} 00:00:00")
+    if len(patterns) == 1:
+        args.append(f"--author={patterns[0]}")
+    elif patterns:
+        args.extend(["--extended-regexp", f"--author=({'|'.join(patterns)})"])
+    args.extend(branch_refs)
+    if exclude_ref:
+        args.extend(["--not", exclude_ref])
+
     commits: dict[str, BranchCommitActivity] = {}
-    for pattern in decode_author_patterns(author) or [""]:
-        args = [
-            "log", "--date=short", "--format=@@COMMIT@@%H%x09%ad", "--numstat", "--no-renames",
-        ]
-        if start_day is not None:
-            args.append(f"--since={start_day.isoformat()} 00:00:00")
-        if end_day is not None:
-            args.append(f"--until={(end_day + dt.timedelta(days=1)).isoformat()} 00:00:00")
-        if pattern:
-            args.append(f"--author={pattern}")
-        args.extend(branch_refs)
-        if exclude_ref:
-            args.extend(["--not", exclude_ref])
-        current_hash = ""
-        current_date: dt.date | None = None
-        additions = deletions = 0
-        languages: dict[str, int] = {}
-        for line in run_git(repo, args).splitlines():
-            match = re.fullmatch(r"@@COMMIT@@([0-9a-f]{40,64})\t(\d{4}-\d{2}-\d{2})", line)
-            if match:
-                if current_hash and current_date is not None:
-                    commits[current_hash] = BranchCommitActivity(current_date, additions, deletions, languages)
-                current_hash = match.group(1)
-                current_date = dt.date.fromisoformat(match.group(2))
-                additions = deletions = 0
-                languages = {}
+    current_hash = ""
+    current_date: dt.date | None = None
+    current_author_name = ""
+    current_author_email = ""
+    additions = deletions = 0
+    languages: dict[str, int] = {}
+    for line in run_git(repo, args).splitlines():
+        if line.startswith("@@COMMIT@@"):
+            if current_hash and current_date is not None:
+                commits[current_hash] = BranchCommitActivity(
+                    current_date,
+                    additions,
+                    deletions,
+                    languages,
+                    current_author_name,
+                    current_author_email,
+                )
+            fields = line.removeprefix("@@COMMIT@@").split("\t", 3)
+            current_hash = fields[0].strip() if fields else ""
+            try:
+                current_date = dt.date.fromisoformat(fields[1].strip())
+            except (IndexError, ValueError):
+                current_date = None
+            current_author_name = fields[2].strip() if len(fields) > 2 else ""
+            current_author_email = fields[3].strip() if len(fields) > 3 else ""
+            additions = deletions = 0
+            languages = {}
+            continue
+        if current_hash:
+            parts = line.split("\t", 2)
+            if len(parts) != 3 or not parts[0].isdigit() or not parts[1].isdigit():
                 continue
-            if current_hash:
-                parts = line.split("\t", 2)
-                if len(parts) != 3 or not parts[0].isdigit() or not parts[1].isdigit():
-                    continue
-                path = parts[2].strip()
-                if not path or is_probably_binary_path(path):
-                    continue
-                added, removed = int(parts[0]), int(parts[1])
-                additions += added
-                deletions += removed
-                language = classify_text_language(path)
-                languages[language] = languages.get(language, 0) + added
-        if current_hash and current_date is not None:
-            commits[current_hash] = BranchCommitActivity(current_date, additions, deletions, languages)
-    return {
+            path = parts[2].strip()
+            if not path or is_probably_binary_path(path):
+                continue
+            added, removed = int(parts[0]), int(parts[1])
+            additions += added
+            deletions += removed
+            language = classify_text_language(path)
+            languages[language] = languages.get(language, 0) + added
+    if current_hash and current_date is not None:
+        commits[current_hash] = BranchCommitActivity(
+            current_date,
+            additions,
+            deletions,
+            languages,
+            current_author_name,
+            current_author_email,
+        )
+    filtered = {
         commit_hash: activity
         for commit_hash, activity in commits.items()
         if (start_day is None or activity.day >= start_day)
         and (end_day is None or activity.day <= end_day)
     }
+    with _BRANCH_UNION_CACHE_LOCK:
+        if len(_BRANCH_UNION_CACHE) >= _BRANCH_UNION_CACHE_MAX:
+            _BRANCH_UNION_CACHE.pop(next(iter(_BRANCH_UNION_CACHE)))
+        _BRANCH_UNION_CACHE[cache_key] = dict(filtered)
+        _BRANCH_UNION_CACHE_DIRTY = True
+    return filtered
+
+
+def _filter_activity_by_author(
+    activity: dict[str, BranchCommitActivity],
+    author: str,
+) -> dict[str, BranchCommitActivity]:
+    patterns = decode_author_patterns(author)
+    if not patterns:
+        return dict(activity)
+    return {
+        commit_hash: item
+        for commit_hash, item in activity.items()
+        if _identity_matches_patterns(item.author_name, item.author_email, patterns)
+    }
+
+
+def _filter_activity_by_date(
+    activity: dict[str, BranchCommitActivity],
+    start_day: dt.date,
+    end_day: dt.date,
+) -> dict[str, BranchCommitActivity]:
+    return {
+        commit_hash: item
+        for commit_hash, item in activity.items()
+        if start_day <= item.day <= end_day
+    }
+
+
+def _identity_matches_patterns(name: str, email: str, patterns: list[str]) -> bool:
+    identity = f"{name} <{email}>"
+    for pattern in patterns:
+        try:
+            if re.search(pattern, identity):
+                return True
+        except re.error:
+            if pattern in identity:
+                return True
+    return False
+
+
+def _author_matches_current_identity(repo: Path, author: str) -> bool:
+    patterns = decode_author_patterns(author)
+    if not patterns:
+        return True
+    try:
+        name = run_git(repo, ["config", "user.name"]).strip()
+    except (OSError, RuntimeError):
+        name = ""
+    try:
+        email = run_git(repo, ["config", "user.email"]).strip()
+    except (OSError, RuntimeError):
+        email = ""
+    return bool(name or email) and _identity_matches_patterns(name, email, patterns)
 
 
 def get_branch_union_stats(
@@ -196,6 +411,31 @@ def get_branch_union_stats(
         len(commits),
         len({item.day for item in commits.values()}),
     )
+
+
+def get_branch_union_commit_summary(
+    repo: Path,
+    author: str,
+    branch_refs: tuple[str, ...],
+) -> tuple[int, int]:
+    commits: set[str] = set()
+    active_days: set[dt.date] = set()
+    for pattern in decode_author_patterns(author) or [""]:
+        args = ["log", "--date=short", "--format=%H%x09%ad"]
+        if pattern:
+            args.append(f"--author={pattern}")
+        args.extend(branch_refs)
+        for line in run_git(repo, args).splitlines():
+            commit_hash, separator, raw_day = line.partition("\t")
+            if not separator or not commit_hash:
+                continue
+            try:
+                day = dt.date.fromisoformat(raw_day.strip())
+            except ValueError:
+                continue
+            commits.add(commit_hash)
+            active_days.add(day)
+    return len(commits), len(active_days)
 
 
 def _compute_project_history_stats(
@@ -246,21 +486,6 @@ def _compute_branch_deletions(repo: Path, author: str, tracked_ref: str, current
     return get_committed_deletions(repo, tracked_ref, author, current_ref)
 
 
-def _compute_daily_commit_count(
-    repo: Path,
-    author: str,
-    day: dt.date,
-    tracked_ref: str,
-    current_ref: str,
-    include_local: bool,
-) -> int:
-    next_day = day + dt.timedelta(days=1)
-    count = get_commit_count(repo, author, tracked_ref, since=day, until=next_day)
-    if include_local and current_ref != tracked_ref:
-        count += get_commit_count(repo, author, current_ref, exclude_ref=tracked_ref, since=day, until=next_day)
-    return count
-
-
 def _compute_branch_commit_count(repo: Path, author: str, tracked_ref: str, current_ref: str) -> int:
     if current_ref == tracked_ref:
         return 0
@@ -287,7 +512,41 @@ def _get_branch_activity_start(
             dates.append(dt.date.fromisoformat(value.strip()))
         except ValueError:
             continue
-    return min(dates) if dates else None
+    if dates:
+        return min(dates)
+
+    # Once a branch is merged, `branch --not tracked` becomes empty. The oldest
+    # reflog state retains the branch point, allowing its first own commit to
+    # remain stable after that merge.
+    try:
+        reflog_hashes = [
+            value.strip()
+            for value in run_git(repo, ["reflog", "show", "--format=%H", branch_ref]).splitlines()
+            if value.strip()
+        ]
+    except RuntimeError:
+        reflog_hashes = []
+    if not reflog_hashes:
+        return None
+
+    creation_base = reflog_hashes[-1]
+    fallback_dates: list[dt.date] = []
+    for value in run_git(
+        repo,
+        ["log", "--reverse", "--date=short", "--format=%ad", branch_ref, "--not", creation_base],
+    ).splitlines():
+        try:
+            fallback_dates.append(dt.date.fromisoformat(value.strip()))
+        except ValueError:
+            continue
+    if fallback_dates:
+        return min(fallback_dates)
+
+    try:
+        created_on = run_git(repo, ["show", "-s", "--date=short", "--format=%ad", creation_base]).strip()
+        return dt.date.fromisoformat(created_on)
+    except (RuntimeError, ValueError):
+        return None
 
 
 def _compute_overall_commit_count(
@@ -380,12 +639,7 @@ def build_refresh_snapshot(
     _report_progress(progress, 5, "identity")
     author = resolve_author(repo, author)
     tracked_ref = resolve_ref(repo, config.ref)
-    resolved_config = replace(config, repo=repo, author=author, ref=tracked_ref)
-    _report_progress(progress, 15, "monthly")
-    result = compute_metrics(resolved_config)
     current_ref = resolve_current_ref(repo)
-    base_ref = resolve_base_commit(repo, result.today, config.base_commit, tracked_ref)
-    _report_progress(progress, 35, "branch")
     available_branches = set(list_branch_refs(repo)) if config.selected_branches else set()
     selected_branches = tuple(
         branch for branch in dict.fromkeys(config.selected_branches)
@@ -395,10 +649,52 @@ def build_refresh_snapshot(
         branch.endswith(f"/{current_ref}") for branch in selected_branches
     )
     tracked_selected = includes_tracked_branch(tracked_ref, selected_branches)
+    include_uncommitted = (
+        not config.assume_uncommitted_zero
+        and current_selected
+        and _author_matches_current_identity(repo, author)
+    )
+    resolved_config = replace(
+        config,
+        repo=repo,
+        author=author,
+        ref=tracked_ref,
+        assume_uncommitted_zero=not include_uncommitted,
+    )
+    _report_progress(progress, 15, "monthly")
     if selected_branches:
-        unique_activity = get_branch_union_activity(
-            repo, author, selected_branches, base_ref if tracked_selected else tracked_ref
+        today = config.today or dt.date.today()
+        month_end = resolve_month_end(today, config.month_end)
+        days_left_including_today = max((month_end - today).days + 1, 0)
+        result = TrackerResult(
+            today=today,
+            month_end=month_end,
+            days_left_including_today=days_left_including_today,
+            days_left_after_today=max(days_left_including_today - 1, 0),
+            committed_total=0,
+            uncommitted_insertions=(
+                get_uncommitted_insertions(repo) if include_uncommitted else 0
+            ),
+            need_today=0,
+            need_after_commit=0,
         )
+    else:
+        result = compute_metrics(resolved_config)
+    base_ref = resolve_base_commit(repo, result.today, config.base_commit, tracked_ref)
+    _report_progress(progress, 35, "branch")
+    user_scope_total = 0
+    if selected_branches:
+        unique_exclude_ref = base_ref if tracked_selected else tracked_ref
+        all_unique_activity = get_branch_union_activity(
+            repo, "", selected_branches, unique_exclude_ref
+        )
+        unique_activity = _filter_activity_by_author(all_unique_activity, author)
+        all_user_union_activity = (
+            all_unique_activity
+            if tracked_selected
+            else get_branch_union_activity(repo, "", selected_branches, base_ref)
+        )
+        user_union_activity = _filter_activity_by_author(all_user_union_activity, author)
         branch_stats_list: list[BranchStats] = []
         for branch in selected_branches:
             exclude_ref = base_ref if includes_tracked_branch(tracked_ref, (branch,)) else tracked_ref
@@ -417,7 +713,37 @@ def build_refresh_snapshot(
         branch_deletions = sum(item.deletions for item in unique_activity.values())
         branch_commit_count = len(unique_activity)
         branch_active_days = len({item.day for item in unique_activity.values()})
-        progress_branch_total = _compute_branch_total(repo, author, tracked_ref, current_ref)
+        progress_branch_total = branch_total
+        user_base_total = (
+            config.base_total
+            if config.base_total >= 0
+            else get_total_insertions_up_to(repo, base_ref, author)
+        )
+        user_committed_total = user_base_total + sum(
+            item.additions for item in user_union_activity.values()
+        )
+        overall_deletions = get_total_deletions_up_to(repo, base_ref, author) + sum(
+            item.deletions for item in user_union_activity.values()
+        )
+        overall_commit_count, overall_active_days = get_branch_union_commit_summary(
+            repo, author, selected_branches
+        )
+        all_author_base_total = (
+            user_base_total if not author else get_total_insertions_up_to(repo, base_ref, "")
+        )
+        user_scope_total = all_author_base_total + sum(
+            item.additions for item in all_user_union_activity.values()
+        )
+        result = replace(
+            result,
+            committed_total=user_committed_total,
+            need_today=daily_needed(config.goal, user_committed_total, result.days_left_including_today),
+            need_after_commit=daily_needed(
+                config.goal,
+                user_committed_total + result.uncommitted_insertions,
+                result.days_left_after_today,
+            ),
+        )
     else:
         branch_total = _compute_branch_total(repo, author, tracked_ref, current_ref)
         progress_branch_total = branch_total
@@ -434,10 +760,13 @@ def build_refresh_snapshot(
                 _get_branch_activity_start(repo, current_ref, tracked_ref),
             ),
         )
-    uncommitted_deletions = get_uncommitted_deletions(repo)
-    daily_commit_count = _compute_daily_commit_count(repo, author, result.today, tracked_ref, current_ref, config.include_local)
+        user_committed_total = result.committed_total
+    uncommitted_deletions = get_uncommitted_deletions(repo) if include_uncommitted else 0
     _report_progress(progress, 50, "overall")
-    overall_commit_count = _compute_overall_commit_count(repo, author, tracked_ref, current_ref, config.include_local)
+    if not selected_branches:
+        overall_commit_count = _compute_overall_commit_count(
+            repo, author, tracked_ref, current_ref, config.include_local
+        )
     project_history = _compute_project_history_stats(
         repo,
         base_ref,
@@ -448,47 +777,49 @@ def build_refresh_snapshot(
     project_commit_count = project_history.commits
     project_active_days = project_history.active_days
     repository_birth_date = project_history.birth_date
-    overall_active_days = _compute_overall_active_days(repo, author, tracked_ref, current_ref, config.include_local)
-    overall_deletions = _compute_overall_committed_deletions(
-        repo,
-        base_ref,
-        author,
-        tracked_ref,
-        current_ref,
-        config.include_local,
-    )
+    if not selected_branches:
+        overall_active_days = _compute_overall_active_days(
+            repo, author, tracked_ref, current_ref, config.include_local
+        )
+        overall_deletions = _compute_overall_committed_deletions(
+            repo,
+            base_ref,
+            author,
+            tracked_ref,
+            current_ref,
+            config.include_local,
+        )
     _report_progress(progress, 65, "languages")
     project_language_lines = get_project_language_lines(repo)
     project_total_lines = sum(project_language_lines.values())
     uncommitted_language_lines = (
-        {} if config.assume_uncommitted_zero else get_uncommitted_insertions_by_language(repo)
+        get_uncommitted_insertions_by_language(repo) if include_uncommitted else {}
     )
-    graph_uncommitted_insertions = result.uncommitted_insertions if current_selected else 0
-    graph_uncommitted_deletions = uncommitted_deletions if current_selected else 0
-    graph_uncommitted_languages = uncommitted_language_lines if current_selected else {}
+    graph_uncommitted_insertions = result.uncommitted_insertions
+    graph_uncommitted_deletions = uncommitted_deletions
+    graph_uncommitted_languages = uncommitted_language_lines
     overall_progress_language_lines = dict(project_language_lines)
-    committed_today = get_committed_insertions_for_date_combined(
-        repo,
-        result.today,
-        author,
-        tracked_ref,
-        config.include_local,
-    )
     _report_progress(progress, 80, "activity")
-    today_done = committed_today + result.uncommitted_insertions
     graph_start_day = result.today - dt.timedelta(days=graph_days - 1)
     graph_available_start_day = result.today - dt.timedelta(days=GRAPH_AVAILABLE_DAYS - 1)
     grass_start_day, grass_end_day = get_grass_date_range(result.today)
     window_start_day = min(graph_available_start_day, grass_start_day)
     window_end_day = grass_end_day
     if selected_branches:
-        selected_activity = get_branch_union_activity(
-            repo,
-            author,
-            selected_branches,
-            None if tracked_selected else tracked_ref,
-            window_start_day,
-            window_end_day,
+        selected_activity = (
+            get_branch_union_activity(
+                repo,
+                author,
+                selected_branches,
+                None,
+                window_start_day,
+                window_end_day,
+            )
+            if tracked_selected
+            else _filter_activity_by_author(
+                _filter_activity_by_date(all_unique_activity, window_start_day, window_end_day),
+                author,
+            )
         )
         language_added_by_date: dict[dt.date, dict[str, int]] = {}
         deleted_by_date: dict[dt.date, int] = {}
@@ -500,12 +831,8 @@ def build_refresh_snapshot(
             )
             deleted_by_date[day] = deleted_by_date.get(day, 0) + activity.deletions
             commit_counts_by_date[day] = commit_counts_by_date.get(day, 0) + 1
-        daily_language_by_date = get_committed_insertions_by_date_and_language_combined(
-            repo, result.today, result.today, author, tracked_ref, config.include_local
-        )
-        daily_deleted_by_date = get_committed_deletions_by_date_combined(
-            repo, result.today, result.today, author, tracked_ref, config.include_local
-        )
+        daily_language_by_date = language_added_by_date
+        daily_deleted_by_date = deleted_by_date
     else:
         language_added_by_date = get_committed_insertions_by_date_and_language_combined(
             repo, window_start_day, window_end_day, author, tracked_ref, config.include_local
@@ -518,6 +845,7 @@ def build_refresh_snapshot(
         )
         daily_language_by_date = language_added_by_date
         daily_deleted_by_date = deleted_by_date
+    daily_commit_count = commit_counts_by_date.get(result.today, 0)
     added_by_date = {
         day: sum(language_totals.values())
         for day, language_totals in language_added_by_date.items()
@@ -526,6 +854,7 @@ def build_refresh_snapshot(
         daily_language_by_date.get(result.today, {}),
         uncommitted_language_lines,
     )
+    today_done = sum(daily_language_by_date.get(result.today, {}).values()) + result.uncommitted_insertions
     daily_removed = daily_deleted_by_date.get(result.today, 0) + uncommitted_deletions
     all_added_points = _build_points_window(
         result,
@@ -578,10 +907,21 @@ def build_refresh_snapshot(
         ]
     grass_points = all_added_points[grass_start_index:grass_end_index]
     graph_avg, graph_max = _summarize_points(points)
+    user_uncommitted_insertions = result.uncommitted_insertions
+    user_uncommitted_deletions = uncommitted_deletions
+    user_cumulative_lines = user_committed_total + user_uncommitted_insertions
+    user_cumulative_deletions = overall_deletions + user_uncommitted_deletions
+    share_denominator = user_scope_total if selected_branches else project_history.additions
     share_percent = (
-        (result.committed_total / project_history.additions) * 100.0
-        if project_history.additions > 0
+        (user_committed_total / share_denominator) * 100.0
+        if share_denominator > 0
         else 0.0
+    )
+    history_refs = selected_branches or (current_ref or tracked_ref,)
+    history_exclude_ref = (
+        base_ref
+        if not selected_branches or tracked_selected
+        else tracked_ref
     )
     _report_progress(progress, 100, "complete")
 
@@ -624,12 +964,16 @@ def build_refresh_snapshot(
         overall_progress_language_lines=overall_progress_language_lines,
         daily_progress_language_lines=daily_progress_language_lines,
         share_text=f"{share_percent:.1f}%",
+        user_cumulative_lines=user_cumulative_lines,
+        user_cumulative_deletions=user_cumulative_deletions,
         uncommitted_deletions=uncommitted_deletions,
         selected_branches=selected_branches or (current_ref,),
         progress_branch_total=progress_branch_total,
         daily_removed=daily_removed,
         graph_uncommitted_insertions=graph_uncommitted_insertions,
         branch_stats=branch_stats,
+        history_refs=history_refs,
+        history_exclude_ref=history_exclude_ref,
     )
 
 

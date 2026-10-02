@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import threading
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -892,18 +893,41 @@ def parse_shortstat_totals(text: str) -> tuple[int, int]:
 def get_commit_change_entries(
     repo: Path,
     author: str,
-    ref: str = "HEAD",
+    ref: str | Sequence[str] = "HEAD",
     exclude_ref: str | None = None,
     limit: int = 80,
     skip: int = 0,
 ) -> list[CommitChangeEntry]:
+    refs = _normalize_git_refs(ref)
     author_patterns = decode_author_patterns(author)
     if len(author_patterns) > 1:
         merged: dict[str, CommitChangeEntry] = {}
+        candidate_count = max(limit + skip, 1)
         for pattern in author_patterns:
-            for entry in get_commit_change_entries(repo, pattern, ref, exclude_ref, limit, skip):
+            for entry in get_commit_change_entries(
+                repo,
+                pattern,
+                refs,
+                exclude_ref,
+                candidate_count,
+                0,
+            ):
                 merged[entry.commit_hash] = entry
-        return list(merged.values())[:limit]
+        if not merged:
+            return []
+
+        order_args = ["log", "--format=%H", *refs]
+        if exclude_ref:
+            order_args.extend(["--not", exclude_ref])
+        commit_order = {
+            commit_hash: index
+            for index, commit_hash in enumerate(run_git(repo, order_args).splitlines())
+        }
+        ordered = sorted(
+            merged.values(),
+            key=lambda entry: commit_order.get(entry.commit_hash, len(commit_order)),
+        )
+        return ordered[skip : skip + limit]
 
     author_pattern = author_patterns[0] if author_patterns else ""
     pretty = "@@COMMIT@@%H%x09%h%x09%ad%x09%s"
@@ -915,7 +939,7 @@ def get_commit_change_entries(
         "--date=short",
         f"--pretty=tformat:{pretty}",
         "--numstat",
-        ref,
+        *refs,
     ]
     if author_pattern:
         args.insert(3, f"--author={author_pattern}")
@@ -977,6 +1001,14 @@ def get_commit_change_entries(
 
     flush_current()
     return entries[:limit]
+
+
+def _normalize_git_refs(ref: str | Sequence[str]) -> tuple[str, ...]:
+    if isinstance(ref, str):
+        cleaned = ref.strip()
+        return (cleaned or "HEAD",)
+    refs = tuple(value.strip() for value in ref if value.strip())
+    return refs or ("HEAD",)
 
 
 def get_commit_detail(repo: Path, commit_hash: str) -> CommitDetail:

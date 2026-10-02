@@ -522,6 +522,34 @@ class QtApplicationTests(unittest.TestCase):
         subject.settings = UISettings(author_display="Alice <alice@example.com>")
         self.assertEqual(LineTrackerQtWindow._user_stats_title(subject), "Alice")
 
+    def test_settings_save_failure_is_reported(self) -> None:
+        from line_tracker_settings import UISettings
+        from qt_app.main_window import LineTrackerQtWindow
+
+        subject = Mock()
+        subject.capture_mode = False
+        subject.settings = UISettings()
+        subject.repo = Path.cwd()
+        subject.repo_selected = True
+        subject.lang = "ko"
+        subject.theme_name = "forest"
+        subject.goal = 100
+        subject.settings_path = Path("C:/unwritable/settings.json")
+        subject.width.return_value = 1200
+        subject.height.return_value = 800
+        subject.x.return_value = 10
+        subject.y.return_value = 20
+        subject.t.side_effect = lambda key, **kwargs: key.format(**kwargs)
+
+        with (
+            patch("qt_app.main_window.save_ui_settings", return_value=False),
+            patch("qt_app.main_window.QMessageBox.warning") as warning,
+        ):
+            saved = LineTrackerQtWindow._save_settings(subject, notify=True)
+
+        self.assertFalse(saved)
+        warning.assert_called_once()
+
     def test_first_run_startup_waits_for_repository_selection(self) -> None:
         from line_tracker_args import make_ui_parser
         from line_tracker_settings import UISettings

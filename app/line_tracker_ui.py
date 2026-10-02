@@ -350,7 +350,7 @@ class LineTrackerApp:
         self.commit_history_loading = False
         self.commit_history_exhausted = False
         self.commit_history_generation = 0
-        self.commit_history_ref = "HEAD"
+        self.commit_history_refs = ("HEAD",)
         self.commit_history_exclude_ref = ""
         self.repo_entry_var = tk.StringVar(value=str(self.repo) if self.repo_selected else "")
         self.schedule_path = self.settings.schedule_path
@@ -1906,6 +1906,8 @@ class LineTrackerApp:
         overall_commit_count: int,
         project_total_lines: int,
         share_text: str,
+        user_cumulative_lines: int,
+        user_cumulative_deletions: int,
     ) -> None:
         self.title_date_var.set(result.today.isoformat())
         self.daily_stats_added_var.set(f"+{result.uncommitted_insertions:,}")
@@ -1914,8 +1916,8 @@ class LineTrackerApp:
         self.branch_stats_added_var.set(f"+{branch_total:,}")
         self.branch_stats_removed_var.set(f"-{branch_deletions:,}")
         self.branch_stats_commit_var.set(f"{branch_commit_count:,} commit")
-        self.overall_stats_added_var.set(f"+{result.committed_total + result.uncommitted_insertions:,}")
-        self.overall_stats_removed_var.set(f"-{overall_deletions + uncommitted_deletions:,}")
+        self.overall_stats_added_var.set(f"+{user_cumulative_lines:,}")
+        self.overall_stats_removed_var.set(f"-{user_cumulative_deletions:,}")
         self.overall_stats_commit_var.set(f"{overall_commit_count:,} commit")
 
         branch_value = f"{branch_total:,}{self.t('lines_suffix')}" if branch_total is not None else ""
@@ -1926,7 +1928,7 @@ class LineTrackerApp:
             (self.t("branch_active_days_label"), f"{branch_active_days:,}{self.t('day_suffix')}"),
             (self.t("project_total_label"), f"{project_total_lines:,}{self.t('lines_suffix')}"),
             (self.t("share_label"), share_text),
-            (self.t("user_total_label"), f"{result.committed_total + result.uncommitted_insertions:,}{self.t('lines_suffix')}"),
+            (self.t("user_total_label"), f"{user_cumulative_lines:,}{self.t('lines_suffix')}"),
             (self.t("user_active_days_label"), f"{overall_active_days:,}{self.t('day_suffix')}"),
         ]
 
@@ -3598,7 +3600,11 @@ class LineTrackerApp:
             theme=self.theme_name,
             geometry=self.get_persisted_geometry(),
         )
-        save_ui_settings(self.settings_path, self.settings)
+        if not save_ui_settings(self.settings_path, self.settings):
+            messagebox.showerror(
+                self.t("settings_save_error_title"),
+                self.t("settings_save_error", path=str(self.settings_path)),
+            )
 
     def parse_today_entry(self) -> dt.date:
         value = self.today_entry_var.get().strip()
@@ -4313,6 +4319,8 @@ class LineTrackerApp:
             snapshot.overall_commit_count,
             snapshot.project_total_lines,
             snapshot.share_text,
+            snapshot.user_cumulative_lines,
+            snapshot.user_cumulative_deletions,
         )
         self.update_progress(
             result,
@@ -4510,13 +4518,22 @@ class LineTrackerApp:
             current_ref = resolve_current_ref(self.repo)
             base_ref = resolve_base_commit(self.repo, today, self.base_commit, tracked_ref)
         except (OSError, RuntimeError):
-            self.commit_history_ref = "HEAD"
+            self.commit_history_refs = ("HEAD",)
             self.commit_history_exclude_ref = ""
             self.update_commit_history([])
             return
 
-        self.commit_history_ref = current_ref or tracked_ref
-        self.commit_history_exclude_ref = base_ref
+        snapshot = self.last_refresh_snapshot
+        self.commit_history_refs = (
+            snapshot.history_refs
+            if snapshot is not None and snapshot.history_refs
+            else (current_ref or tracked_ref,)
+        )
+        self.commit_history_exclude_ref = (
+            snapshot.history_exclude_ref
+            if snapshot is not None and snapshot.history_exclude_ref
+            else base_ref
+        )
         self.commit_history_entries = []
         self.commit_history_loading = False
         self.commit_history_exhausted = False
@@ -4536,7 +4553,7 @@ class LineTrackerApp:
         self.commit_history_loading = True
         worker = threading.Thread(
             target=self._commit_history_worker,
-            args=(generation, skip, COMMIT_HISTORY_PAGE_SIZE, self.commit_history_ref, self.commit_history_exclude_ref),
+            args=(generation, skip, COMMIT_HISTORY_PAGE_SIZE, self.commit_history_refs, self.commit_history_exclude_ref),
             daemon=True,
         )
         worker.start()
@@ -4546,14 +4563,14 @@ class LineTrackerApp:
         generation: int,
         skip: int,
         limit: int,
-        ref: str,
+        refs: tuple[str, ...],
         exclude_ref: str,
     ) -> None:
         try:
             entries = get_commit_change_entries(
                 self.repo,
                 self.author,
-                ref,
+                refs,
                 exclude_ref=exclude_ref or None,
                 limit=limit,
                 skip=skip,
