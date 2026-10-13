@@ -18,10 +18,10 @@ from pathlib import Path
 
 from line_tracker_io import write_text_atomic
 from line_tracker_process import CommandTimeoutError, run_command
+from line_tracker_workspace_index import WorkspaceLineIndex
 from line_tracker_text import (
     LANGUAGE_NAMES,
     classify_text_language,
-    count_text_lines,
     is_probably_binary_path,
     merge_language_totals,
     order_language_totals,
@@ -119,6 +119,9 @@ def get_legacy_state_path(filename: str) -> Path:
 
 _CACHE_PATH = get_app_state_path("line_tracker_cache.json")
 _LEGACY_CACHE_PATH = get_legacy_state_path("line_tracker_cache.json")
+_WORKSPACE_LINE_INDEX = WorkspaceLineIndex(
+    get_app_state_path("line_tracker_workspace_index.json")
+)
 
 
 def _iter_git_roots() -> list[Path]:
@@ -238,6 +241,13 @@ class TrackerResult:
     uncommitted_insertions: int
     need_today: int
     need_after_commit: int
+
+
+@dataclass(frozen=True)
+class UncommittedStats:
+    additions: int
+    deletions: int
+    languages: dict[str, int]
 
 
 @dataclass(frozen=True)
@@ -529,6 +539,7 @@ def clear_cache_for_repo(repo: Path) -> None:
         clear_dict(_DELETIONS_BY_DATE_CACHE)
         clear_dict(_COMMITS_BY_DATE_CACHE)
         _mark_cache_dirty()
+    _WORKSPACE_LINE_INDEX.clear_repo(repo)
 
 
 def resolve_author(repo: Path, author: str) -> str:
@@ -626,17 +637,10 @@ def get_ref_hash(repo: Path, ref: str = "HEAD") -> str:
 
 def get_project_language_lines(repo: Path) -> dict[str, int]:
     out = run_git(repo, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"])
-    totals: dict[str, int] = {}
-    for path_text in (value for value in out.split("\0") if value):
-        if is_probably_binary_path(path_text):
-            continue
-        line_count = count_text_lines(repo / path_text)
-        if line_count <= 0:
-            continue
-        language = classify_text_language(path_text)
-        totals[language] = totals.get(language, 0) + line_count
-
-    return order_language_totals(totals)
+    return _WORKSPACE_LINE_INDEX.summarize(
+        repo,
+        [value for value in out.split("\0") if value],
+    )
 
 
 def get_worktree_tracked_text_total(repo: Path) -> int:
@@ -649,7 +653,7 @@ def get_worktree_tracked_text_total(repo: Path) -> int:
     for path_text in files:
         if is_probably_binary_path(path_text):
             continue
-        total += count_text_lines(repo / path_text)
+        total += _WORKSPACE_LINE_INDEX.line_count(repo, path_text)
     return total
 
 
@@ -1069,6 +1073,30 @@ def get_uncommitted_insertions(repo: Path) -> int:
     return tracked_insertions + untracked_insertions
 
 
+def get_uncommitted_stats(repo: Path) -> UncommittedStats:
+    tracked_out = run_git(repo, ["diff", "--numstat", "--no-renames", "HEAD"])
+    additions = parse_numstat_insertions(tracked_out)
+    deletions = parse_numstat_deletions(tracked_out)
+    languages = parse_numstat_insertions_by_language(tracked_out)
+
+    untracked_out = run_git(repo, ["ls-files", "--others", "--exclude-standard"])
+    for path_text in (line.strip() for line in untracked_out.splitlines() if line.strip()):
+        if is_probably_binary_path(path_text):
+            continue
+        line_count = _WORKSPACE_LINE_INDEX.line_count(repo, path_text)
+        if line_count <= 0:
+            continue
+        additions += line_count
+        language = classify_text_language(path_text)
+        languages[language] = languages.get(language, 0) + line_count
+
+    return UncommittedStats(
+        additions=additions,
+        deletions=deletions,
+        languages=order_language_totals(languages),
+    )
+
+
 def get_uncommitted_insertions_by_language(repo: Path) -> dict[str, int]:
     tracked_out = run_git(repo, ["diff", "--numstat", "--no-renames", "HEAD"])
     tracked = parse_numstat_insertions_by_language(tracked_out)
@@ -1078,7 +1106,7 @@ def get_uncommitted_insertions_by_language(repo: Path) -> dict[str, int]:
     for path_text in (line.strip() for line in untracked_out.splitlines() if line.strip()):
         if is_probably_binary_path(path_text):
             continue
-        line_count = count_text_lines(repo / path_text)
+        line_count = _WORKSPACE_LINE_INDEX.line_count(repo, path_text)
         if line_count <= 0:
             continue
         language = classify_text_language(path_text)
@@ -1132,7 +1160,7 @@ def get_untracked_text_insertions(repo: Path) -> int:
     for rel_path in files:
         if is_probably_binary_path(rel_path):
             continue
-        total += count_text_lines(repo / rel_path)
+        total += _WORKSPACE_LINE_INDEX.line_count(repo, rel_path)
 
     return total
 
@@ -1894,6 +1922,7 @@ def format_output_lines(result: TrackerResult) -> list[str]:
 
 
 atexit.register(_save_cache)
+atexit.register(_WORKSPACE_LINE_INDEX.save)
 
 
 def configure_console_output() -> None:

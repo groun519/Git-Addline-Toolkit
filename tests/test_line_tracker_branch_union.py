@@ -14,6 +14,7 @@ if str(APP_DIR) not in sys.path:
 
 import line_tracker_refresh
 from line_tracker import TrackerConfig, encode_author_patterns, list_branch_refs, resolve_git_executable
+from line_tracker_activity_index import CommitActivityIndex
 from line_tracker_presenters import build_dashboard_presentation
 from line_tracker_refresh import (
     _get_branch_activity_start,
@@ -25,21 +26,15 @@ from line_tracker_refresh import (
 
 class BranchUnionTests(unittest.TestCase):
     def setUp(self) -> None:
-        self._cache_state = (
-            dict(line_tracker_refresh._BRANCH_UNION_CACHE),
-            line_tracker_refresh._BRANCH_UNION_CACHE_LOADED,
-            line_tracker_refresh._BRANCH_UNION_CACHE_DIRTY,
+        self._activity_cache_dir = tempfile.TemporaryDirectory()
+        self._activity_index = line_tracker_refresh._ACTIVITY_INDEX
+        line_tracker_refresh._ACTIVITY_INDEX = CommitActivityIndex(
+            Path(self._activity_cache_dir.name) / "activity.json"
         )
-        line_tracker_refresh._BRANCH_UNION_CACHE.clear()
-        line_tracker_refresh._BRANCH_UNION_CACHE_LOADED = True
-        line_tracker_refresh._BRANCH_UNION_CACHE_DIRTY = False
 
     def tearDown(self) -> None:
-        cache, loaded, dirty = self._cache_state
-        line_tracker_refresh._BRANCH_UNION_CACHE.clear()
-        line_tracker_refresh._BRANCH_UNION_CACHE.update(cache)
-        line_tracker_refresh._BRANCH_UNION_CACHE_LOADED = loaded
-        line_tracker_refresh._BRANCH_UNION_CACHE_DIRTY = dirty
+        line_tracker_refresh._ACTIVITY_INDEX = self._activity_index
+        self._activity_cache_dir.cleanup()
 
     def test_other_remote_with_same_branch_name_is_not_the_tracked_branch(self) -> None:
         self.assertTrue(includes_tracked_branch("origin/develop", ("develop", "feature")))

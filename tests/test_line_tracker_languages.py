@@ -65,9 +65,9 @@ class LanguageLineTests(unittest.TestCase):
             },
         )
 
-    @patch("line_tracker.count_text_lines")
+    @patch("line_tracker._WORKSPACE_LINE_INDEX.line_count")
     @patch("line_tracker.run_git")
-    def test_get_project_language_lines_returns_only_present_text_groups(self, mock_run_git, mock_count_lines) -> None:
+    def test_get_project_language_lines_returns_only_present_text_groups(self, mock_run_git, mock_line_count) -> None:
         mock_run_git.return_value = (
             "Source/Player.cpp\0Source/Player.h\0Data/config.json\0"
             "Docs/readme.md\0Content/Asset.uasset\0misc.xyz\0"
@@ -79,7 +79,9 @@ class LanguageLineTests(unittest.TestCase):
             ".md": 10,
             ".xyz": 5,
         }
-        mock_count_lines.side_effect = lambda path: line_counts.get(path.suffix.lower(), 0)
+        mock_line_count.side_effect = (
+            lambda _repo, path: line_counts.get(Path(path).suffix.lower(), 0)
+        )
 
         result = get_project_language_lines(Path("C:/repo"))
 
@@ -92,7 +94,10 @@ class LanguageLineTests(unittest.TestCase):
                 "Other": 5,
             },
         )
-        self.assertNotIn("Content/Asset.uasset", [str(call.args[0]) for call in mock_count_lines.call_args_list])
+        self.assertNotIn(
+            "Content/Asset.uasset",
+            [str(call.args[1]) for call in mock_line_count.call_args_list],
+        )
 
 
 if __name__ == "__main__":
