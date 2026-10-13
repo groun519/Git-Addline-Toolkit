@@ -171,7 +171,7 @@ class MockupView(QWidget):
         self.catalog = None
         self.selected_document = None
         self.source_path = None
-        self.source_label.setText("codex/mockups")
+        self.source_label.clear()
         self.summary.hide()
         self.search.setEnabled(False)
         self.section_filter.setEnabled(False)
@@ -190,10 +190,11 @@ class MockupView(QWidget):
         self.open_button.setEnabled(False)
 
     def show_error(self, message: str) -> None:
+        source = self.source_label.text()
         self.catalog = None
         self.selected_document = None
         self.source_path = None
-        self.source_label.setText("codex/mockups")
+        self.source_label.setText(source)
         self.summary.hide()
         self.search.setEnabled(False)
         self.section_filter.setEnabled(False)
@@ -224,7 +225,11 @@ class MockupView(QWidget):
         self.search.setEnabled(True)
         self.section_filter.setEnabled(True)
         self.reload_button.setEnabled(True)
-        self.sync_button.setEnabled(catalog.worktree_path is not None)
+        can_sync = catalog.worktree_path is not None and catalog.dirty_count == 0
+        self.sync_button.setEnabled(can_sync)
+        self.sync_button.setToolTip(
+            self.t("mockup_sync") if can_sync else self.t("mockup_sync_disabled")
+        )
         self.location_button.setEnabled(catalog.worktree_path is not None)
         self.open_button.setEnabled(False)
         self._populate_tree()
@@ -261,7 +266,9 @@ class MockupView(QWidget):
             return
         if self.catalog is not None:
             self.reload_button.setEnabled(True)
-            self.sync_button.setEnabled(self.catalog.worktree_path is not None)
+            self.sync_button.setEnabled(
+                self.catalog.worktree_path is not None and self.catalog.dirty_count == 0
+            )
             self.location_button.setEnabled(self.catalog.worktree_path is not None)
             self.open_button.setEnabled(self.source_path is not None)
 
@@ -296,12 +303,12 @@ class MockupView(QWidget):
             for document in groups[workspace]:
                 item = QTreeWidgetItem([document.title, document.status])
                 item.setData(0, Qt.ItemDataRole.UserRole, document)
-                item.setToolTip(0, document.path)
+                item.setToolTip(0, self._document_tooltip(document, query))
                 group_item.addChild(item)
                 first_item = first_item or item
                 if document.path == selected_path:
                     selected_item = item
-            group_item.setExpanded(True)
+            group_item.setExpanded(bool(query) or workspace == "overview" or len(groups) == 1)
         self.tree.blockSignals(False)
 
         target = selected_item or first_item
@@ -313,6 +320,22 @@ class MockupView(QWidget):
             self.source_path = None
             self.open_button.setEnabled(False)
             self._show_preview_message(self.t("mockup_empty"))
+
+    @staticmethod
+    def _document_tooltip(document: MockupDocument, query: str) -> str:
+        if not query:
+            return document.path
+        position = document.search_text.find(query)
+        if position < 0:
+            return document.path
+        start = max(0, position - 55)
+        end = min(len(document.search_text), position + len(query) + 75)
+        excerpt = " ".join(document.search_text[start:end].split())
+        if start:
+            excerpt = f"…{excerpt}"
+        if end < len(document.search_text):
+            excerpt = f"{excerpt}…"
+        return f"{document.path}\n\n{excerpt}"
 
     def _on_current_item_changed(
         self,

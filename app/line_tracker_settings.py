@@ -50,6 +50,9 @@ class UISettings:
     note_tab: str = "schedule"
     schedule_path: str = ""
     selected_branches: tuple[str, ...] = ()
+    mockup_branch: str = "codex/mockups"
+    mockup_wip_root: str = "docs/wip"
+    mockup_archive_root: str = "docs/archive"
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> UISettings:
@@ -88,6 +91,9 @@ class UISettings:
             note_tab=note_tab,
             schedule_path=str(data.get("schedule_path", "")).strip(),
             selected_branches=_coerce_selected_branches(data.get("selected_branches")),
+            mockup_branch=str(data.get("mockup_branch", "codex/mockups")).strip() or "codex/mockups",
+            mockup_wip_root=str(data.get("mockup_wip_root", "docs/wip")).strip() or "docs/wip",
+            mockup_archive_root=str(data.get("mockup_archive_root", "docs/archive")).strip() or "docs/archive",
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -109,6 +115,9 @@ class UISettings:
             "note_tab": self.note_tab,
             "schedule_path": self.schedule_path,
             "selected_branches": list(self.selected_branches),
+            "mockup_branch": self.mockup_branch,
+            "mockup_wip_root": self.mockup_wip_root,
+            "mockup_archive_root": self.mockup_archive_root,
             "repo_path": self.repo_path,
             "lang": self.lang,
             "theme": self.theme,

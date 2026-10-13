@@ -100,6 +100,9 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.graph_languages, ("C++",))
         self.assertEqual(settings.note_tab, "schedule")
         self.assertEqual(settings.schedule_path, "")
+        self.assertEqual(settings.mockup_branch, "codex/mockups")
+        self.assertEqual(settings.mockup_wip_root, "docs/wip")
+        self.assertEqual(settings.mockup_archive_root, "docs/archive")
 
     def test_ui_settings_to_dict_only_writes_current_keys(self) -> None:
         settings = UISettings(
@@ -140,6 +143,9 @@ class SettingsTests(unittest.TestCase):
                 "note_tab": "grass",
                 "schedule_path": "docs/SCHEDULE.md",
                 "selected_branches": [],
+                "mockup_branch": "codex/mockups",
+                "mockup_wip_root": "docs/wip",
+                "mockup_archive_root": "docs/archive",
                 "repo_path": "C:/repo",
                 "lang": "ko",
                 "theme": "cream",
@@ -178,9 +184,19 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.schedule_path, "docs/plan.md")
 
     def test_ui_settings_accepts_mockup_tab(self) -> None:
-        settings = UISettings.from_dict({"note_tab": "mockups"})
+        settings = UISettings.from_dict(
+            {
+                "note_tab": "mockups",
+                "mockup_branch": " design/mockups ",
+                "mockup_wip_root": " notes/wip ",
+                "mockup_archive_root": " notes/archive ",
+            }
+        )
 
         self.assertEqual(settings.note_tab, "mockups")
+        self.assertEqual(settings.mockup_branch, "design/mockups")
+        self.assertEqual(settings.mockup_wip_root, "notes/wip")
+        self.assertEqual(settings.mockup_archive_root, "notes/archive")
 
     def test_load_settings_falls_back_to_legacy_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

@@ -255,7 +255,10 @@ class QtApplicationTests(unittest.TestCase):
         self.assertEqual(values.goal, 50000)
         self.assertEqual(values.author_raw, "auto")
         self.assertEqual(values.graph_languages, ("C++",))
-        self.assertEqual(dialog.tabs.count(), 5)
+        self.assertEqual(values.mockup_branch, "codex/mockups")
+        self.assertEqual(values.mockup_wip_root, "docs/wip")
+        self.assertEqual(values.mockup_archive_root, "docs/archive")
+        self.assertEqual(dialog.tabs.count(), 6)
         self.assertFalse(dialog.restart_requested)
 
         dialog.restart_button.click()
@@ -566,6 +569,25 @@ class QtApplicationTests(unittest.TestCase):
         self.app.processEvents()
         self.assertTrue(window.activity_graph.isVisible())
         self.assertTrue(window.history_view.isVisible())
+        window.close()
+
+    def test_resetting_mockups_preserves_saved_workspace_selection(self) -> None:
+        from dataclasses import replace
+
+        from line_tracker_args import make_ui_parser
+        from qt_app.main_window import LineTrackerQtWindow
+
+        args = make_ui_parser().parse_args(["--repo", str(Path.cwd())])
+        window = LineTrackerQtWindow(args, capture_mode=True)
+        window.settings = replace(window.settings, note_tab="mockups")
+        mockup_index = window._workspace_index("mockups")
+        window.workspace_tabs.setTabVisible(mockup_index, True)
+        window.workspace_tabs.setCurrentIndex(mockup_index)
+
+        window._reset_mockups()
+
+        self.assertEqual(window.settings.note_tab, "mockups")
+        self.assertFalse(window.workspace_tabs.isTabVisible(mockup_index))
         window.close()
 
     def test_window_construction_does_not_spawn_git_queries(self) -> None:

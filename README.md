@@ -4,7 +4,7 @@ Windows-only Git line tracking UI for any Git repository.
 
 - Monthly progress dashboard for committed and uncommitted added lines
 - Schedule tab backed by a selectable Markdown file
-- Mockup explorer for the repository's `codex/mockups` branch
+- Mockup explorer for a configurable repository branch and document roots
 - Git grass tab based on daily added lines
 - Theme support
 - 1-minute auto refresh
@@ -128,10 +128,12 @@ ITEM-002 | PLANNED | | Item Core
 
 ### Mockup Tab
 
-- 선택한 리포지토리의 `codex/mockups` 또는 `origin/codex/mockups` 브랜치를 자동 탐색합니다.
-- `docs/wip`과 `docs/archive`의 Markdown을 작업공간별로 묶고, 제목·경로·본문을 검색합니다.
+- 기본값으로 선택한 리포지토리의 `codex/mockups` 또는 `origin/codex/mockups` 브랜치를 자동 탐색합니다.
+- 목업 브랜치와 진행/보관 문서 루트는 설정의 `목업` 탭에서 리포지토리 구조에 맞게 바꿀 수 있습니다.
+- 설정한 브랜치가 없는 리포지토리에서는 목업 탭을 숨겨 일반 리포지토리 사용을 방해하지 않습니다.
+- 기본 `docs/wip`과 `docs/archive`의 Markdown을 작업공간별로 묶고, 제목·경로·본문을 검색합니다.
 - 선택한 문서는 앱 안에서 미리보고, 연결된 목업 작업트리가 있으면 기본 편집기로 열 수 있습니다.
-- 동기화는 깨끗한 목업 작업트리만 `origin/codex/mockups`로 fast-forward합니다. 로컬 수정이 있으면 덮어쓰지 않습니다.
+- 동기화는 깨끗한 목업 작업트리만 설정한 원격 브랜치로 fast-forward합니다. 로컬 수정이 있으면 버튼을 비활성화하고 덮어쓰지 않습니다.
 - 앱은 목업 변경을 자동 커밋하거나 푸시하지 않습니다.
 
 ### User Filter

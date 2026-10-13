@@ -7,12 +7,24 @@ from pathlib import Path
 from app.line_tracker_mockups import (
     MOCKUP_BRANCH,
     MockupCatalogError,
+    MockupSource,
     load_mockup_catalog,
     sync_mockup_worktree,
 )
 
 
 class MockupCatalogTests(unittest.TestCase):
+    def test_source_normalization_keeps_paths_inside_repository(self) -> None:
+        source = MockupSource(
+            branch="--upload-pack=bad",
+            wip_root="../outside",
+            archive_root="C:/outside",
+        ).normalized()
+
+        self.assertEqual(source.branch, "codex/mockups")
+        self.assertEqual(source.wip_root, "docs/wip")
+        self.assertEqual(source.archive_root, "docs/archive")
+
     def test_load_catalog_indexes_worktree_metadata_and_full_text(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -116,6 +128,52 @@ class MockupCatalogTests(unittest.TestCase):
             calls,
         )
         self.assertIn(("merge", "--ff-only", "origin/codex/mockups"), calls)
+
+    def test_remote_catalog_searches_full_text_with_custom_source(self) -> None:
+        repo = Path("C:/repo")
+        source = MockupSource("design/mockups", "notes/wip", "notes/archive")
+        calls: list[tuple[str, ...]] = []
+
+        def run(_repo: Path, args: list[str]) -> str:
+            calls.append(tuple(args))
+            if args == ["rev-parse", "--verify", "design/mockups"]:
+                raise RuntimeError("missing local branch")
+            if args == ["rev-parse", "--verify", "origin/design/mockups"]:
+                return "a" * 40
+            if args == ["worktree", "list", "--porcelain"]:
+                return ""
+            if args[:3] == ["ls-tree", "-r", "--name-only"]:
+                return "notes/wip/audio/README.md\nnotes/archive/old.md\n"
+            if args[:4] == ["grep", "-n", "-I", "-e"]:
+                return (
+                    "origin/design/mockups:notes/wip/audio/README.md:1:# Audio Workspace\n"
+                    "origin/design/mockups:notes/wip/audio/README.md:3:Unique fallback needle\n"
+                    "origin/design/mockups:notes/archive/old.md:1:# Old Draft\n"
+                )
+            if args[:2] == ["rev-parse", "--short"]:
+                return "def5678\n"
+            raise AssertionError(args)
+
+        catalog = load_mockup_catalog(repo, source=source, run=run)
+
+        self.assertEqual(catalog.branch, "origin/design/mockups")
+        self.assertEqual(catalog.source, source)
+        self.assertEqual(catalog.workspace_count, 1)
+        audio = next(document for document in catalog.documents if document.title == "Audio Workspace")
+        self.assertEqual(audio.workspace, "audio")
+        self.assertIn("unique fallback needle", audio.search_text)
+        self.assertIn(
+            (
+                "ls-tree",
+                "-r",
+                "--name-only",
+                "origin/design/mockups",
+                "--",
+                "notes/wip",
+                "notes/archive",
+            ),
+            calls,
+        )
 
 
 if __name__ == "__main__":

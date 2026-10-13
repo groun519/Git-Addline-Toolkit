@@ -20,6 +20,42 @@ class MockupCatalogError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class MockupSource:
+    branch: str = MOCKUP_BRANCH
+    wip_root: str = MOCKUP_ROOTS[0]
+    archive_root: str = MOCKUP_ROOTS[1]
+
+    def normalized(self) -> MockupSource:
+        branch = self.branch.strip() or MOCKUP_BRANCH
+        if branch.startswith("refs/heads/"):
+            branch = branch.removeprefix("refs/heads/")
+        elif branch.startswith("refs/remotes/"):
+            branch = branch.removeprefix("refs/remotes/")
+        if branch.startswith("-") or any(character in branch for character in "~^:?*[\\"):
+            branch = MOCKUP_BRANCH
+        return MockupSource(
+            branch=branch,
+            wip_root=_normalize_root(self.wip_root, MOCKUP_ROOTS[0]),
+            archive_root=_normalize_root(self.archive_root, MOCKUP_ROOTS[1]),
+        )
+
+    @property
+    def local_branch(self) -> str:
+        return self.branch.removeprefix("origin/")
+
+    @property
+    def remote_branch(self) -> str:
+        return self.branch if self.branch.startswith("origin/") else f"origin/{self.branch}"
+
+    @property
+    def section_roots(self) -> tuple[tuple[str, str], ...]:
+        return (("wip", self.wip_root), ("archive", self.archive_root))
+
+
+DEFAULT_MOCKUP_SOURCE = MockupSource()
+
+
+@dataclass(frozen=True)
 class MockupDocument:
     path: str
     title: str
@@ -27,6 +63,7 @@ class MockupDocument:
     section: str
     status: str = ""
     search_text: str = ""
+    workspace_root: str = "overview"
 
 
 @dataclass(frozen=True)
@@ -35,6 +72,7 @@ class MockupCatalog:
     head: str
     worktree_path: Path | None
     documents: tuple[MockupDocument, ...]
+    source: MockupSource = DEFAULT_MOCKUP_SOURCE
     dirty_count: int = 0
     ahead: int = 0
     behind: int = 0
@@ -42,9 +80,9 @@ class MockupCatalog:
     @property
     def workspace_count(self) -> int:
         roots = {
-            PurePosixPath(document.path).parts[2]
+            document.workspace_root
             for document in self.documents
-            if document.section == "wip" and len(PurePosixPath(document.path).parts) > 3
+            if document.section == "wip" and document.workspace_root != "overview"
         }
         return len(roots)
 
@@ -52,33 +90,52 @@ class MockupCatalog:
 def load_mockup_catalog(
     repo: Path,
     *,
+    source: MockupSource = DEFAULT_MOCKUP_SOURCE,
     run: GitRunner = run_git,
 ) -> MockupCatalog:
-    branch = _resolve_mockup_branch(repo, run)
-    worktree_path = find_branch_worktree(repo, MOCKUP_BRANCH, run=run)
+    source = source.normalized()
+    branch = probe_mockup_source(repo, source=source, run=run)
+    worktree_path = find_branch_worktree(repo, source.local_branch, run=run)
     if worktree_path is not None and worktree_path.is_dir():
-        documents = _load_worktree_documents(worktree_path)
+        documents = _load_worktree_documents(worktree_path, source)
         dirty_count = len(
             [line for line in run(worktree_path, ["status", "--porcelain"]).splitlines() if line]
         )
     else:
-        documents = _load_git_documents(repo, branch, run)
+        documents = _load_git_documents(repo, branch, source, run)
         dirty_count = 0
 
     try:
         head = run(repo, ["rev-parse", "--short", branch]).strip()
     except RuntimeError:
         head = ""
-    ahead, behind = _branch_distance(repo, branch, run)
+    ahead, behind = _branch_distance(repo, branch, source, run)
     return MockupCatalog(
         branch=branch,
         head=head,
         worktree_path=worktree_path,
         documents=documents,
+        source=source,
         dirty_count=dirty_count,
         ahead=ahead,
         behind=behind,
     )
+
+
+def probe_mockup_source(
+    repo: Path,
+    *,
+    source: MockupSource = DEFAULT_MOCKUP_SOURCE,
+    run: GitRunner = run_git,
+) -> str:
+    source = source.normalized()
+    for branch in (source.local_branch, source.remote_branch):
+        try:
+            run(repo, ["rev-parse", "--verify", branch])
+            return branch
+        except RuntimeError:
+            continue
+    raise MockupCatalogError(f"{source.local_branch} branch was not found")
 
 
 def load_mockup_document(
@@ -135,9 +192,11 @@ def find_branch_worktree(
 def sync_mockup_worktree(
     repo: Path,
     *,
+    source: MockupSource = DEFAULT_MOCKUP_SOURCE,
     run: GitRunner = run_git,
 ) -> Path:
-    worktree_path = find_branch_worktree(repo, MOCKUP_BRANCH, run=run)
+    source = source.normalized()
+    worktree_path = find_branch_worktree(repo, source.local_branch, run=run)
     if worktree_path is None:
         raise MockupCatalogError("mockup worktree is not configured")
     if run(worktree_path, ["status", "--porcelain"]).strip():
@@ -147,26 +206,22 @@ def sync_mockup_worktree(
         [
             "fetch",
             "origin",
-            f"+refs/heads/{MOCKUP_BRANCH}:refs/remotes/{MOCKUP_REMOTE_BRANCH}",
+            (
+                f"+refs/heads/{source.local_branch}:"
+                f"refs/remotes/{source.remote_branch}"
+            ),
         ],
     )
-    run(worktree_path, ["merge", "--ff-only", MOCKUP_REMOTE_BRANCH])
+    run(worktree_path, ["merge", "--ff-only", source.remote_branch])
     return worktree_path
 
 
-def _resolve_mockup_branch(repo: Path, run: GitRunner) -> str:
-    for branch in (MOCKUP_BRANCH, MOCKUP_REMOTE_BRANCH):
-        try:
-            run(repo, ["rev-parse", "--verify", branch])
-            return branch
-        except RuntimeError:
-            continue
-    raise MockupCatalogError(f"{MOCKUP_BRANCH} branch was not found")
-
-
-def _load_worktree_documents(worktree: Path) -> tuple[MockupDocument, ...]:
+def _load_worktree_documents(
+    worktree: Path,
+    source: MockupSource,
+) -> tuple[MockupDocument, ...]:
     documents: list[MockupDocument] = []
-    for root_name in MOCKUP_ROOTS:
+    for _section, root_name in source.section_roots:
         root = worktree.joinpath(*PurePosixPath(root_name).parts)
         if not root.is_dir():
             continue
@@ -183,6 +238,7 @@ def _load_worktree_documents(worktree: Path) -> tuple[MockupDocument, ...]:
                     title,
                     status,
                     content.casefold(),
+                    source,
                 )
             )
     return tuple(sorted(documents, key=_document_sort_key))
@@ -191,11 +247,13 @@ def _load_worktree_documents(worktree: Path) -> tuple[MockupDocument, ...]:
 def _load_git_documents(
     repo: Path,
     branch: str,
+    source: MockupSource,
     run: GitRunner,
 ) -> tuple[MockupDocument, ...]:
-    output = run(repo, ["ls-tree", "-r", "--name-only", branch, "--", *MOCKUP_ROOTS])
+    roots = tuple(root for _section, root in source.section_roots)
+    output = run(repo, ["ls-tree", "-r", "--name-only", branch, "--", *roots])
     paths = [line.strip() for line in output.splitlines() if line.strip().lower().endswith(".md")]
-    metadata: dict[str, tuple[str, str]] = {}
+    content_lines: dict[str, list[str]] = {}
     try:
         grep_output = run(
             repo,
@@ -204,12 +262,10 @@ def _load_git_documents(
                 "-n",
                 "-I",
                 "-e",
-                "^# ",
-                "-e",
-                "^> Status:",
+                ".",
                 branch,
                 "--",
-                *MOCKUP_ROOTS,
+                *roots,
             ],
         )
     except RuntimeError:
@@ -222,16 +278,12 @@ def _load_git_documents(
         if len(fields) != 3:
             continue
         path, _line_number, text = fields
-        title, status = metadata.get(path, ("", ""))
-        if text.startswith("# ") and not title:
-            title = text.removeprefix("# ").strip()
-        elif text.startswith("> Status:") and not status:
-            status = _clean_status(text.partition(":")[2])
-        metadata[path] = (title, status)
-    documents = [
-        _make_document(path, *metadata.get(path, ("", "")), "")
-        for path in paths
-    ]
+        content_lines.setdefault(path, []).append(text)
+    documents: list[MockupDocument] = []
+    for path in paths:
+        content = "\n".join(content_lines.get(path, ()))
+        title, status = _parse_document_metadata(content, path)
+        documents.append(_make_document(path, title, status, content.casefold(), source))
     return tuple(sorted(documents, key=_document_sort_key))
 
 
@@ -255,13 +307,22 @@ def _make_document(
     title: str,
     status: str,
     search_text: str,
+    source: MockupSource,
 ) -> MockupDocument:
     pure_path = PurePosixPath(path)
     parts = pure_path.parts
-    section = parts[1] if len(parts) > 1 else "wip"
-    workspace = parts[2] if len(parts) > 3 else "overview"
-    if workspace == "modules" and len(parts) > 5 and parts[3] == "modules":
-        workspace = f"modules / {parts[4]}"
+    section = "wip"
+    relative_parts = parts
+    for candidate_section, root in source.section_roots:
+        root_parts = PurePosixPath(root).parts
+        if parts[:len(root_parts)] == root_parts:
+            section = candidate_section
+            relative_parts = parts[len(root_parts):]
+            break
+    workspace_root = relative_parts[0] if len(relative_parts) > 1 else "overview"
+    workspace = workspace_root
+    if workspace == "modules" and len(relative_parts) > 3 and relative_parts[1] == "modules":
+        workspace = f"modules / {relative_parts[2]}"
     return MockupDocument(
         path=path,
         title=title or pure_path.stem.replace("_", " "),
@@ -269,6 +330,7 @@ def _make_document(
         section=section,
         status=status,
         search_text=search_text,
+        workspace_root=workspace_root,
     )
 
 
@@ -286,15 +348,39 @@ def _document_sort_key(document: MockupDocument) -> tuple[object, ...]:
     )
 
 
-def _branch_distance(repo: Path, branch: str, run: GitRunner) -> tuple[int, int]:
-    if branch != MOCKUP_BRANCH:
+def _branch_distance(
+    repo: Path,
+    branch: str,
+    source: MockupSource,
+    run: GitRunner,
+) -> tuple[int, int]:
+    if branch != source.local_branch:
         return 0, 0
     try:
         output = run(
             repo,
-            ["rev-list", "--left-right", "--count", f"{MOCKUP_BRANCH}...{MOCKUP_REMOTE_BRANCH}"],
+            [
+                "rev-list",
+                "--left-right",
+                "--count",
+                f"{source.local_branch}...{source.remote_branch}",
+            ],
         ).strip()
         left, right = output.split()
         return int(left), int(right)
     except (RuntimeError, ValueError):
         return 0, 0
+
+
+def _normalize_root(value: str, fallback: str) -> str:
+    candidate = PurePosixPath(value.strip().replace("\\", "/"))
+    if (
+        candidate.is_absolute()
+        or ".." in candidate.parts
+        or (candidate.parts and ":" in candidate.parts[0])
+    ):
+        return fallback
+    normalized = candidate.as_posix().strip("/")
+    if normalized in {"", "."}:
+        return fallback
+    return normalized

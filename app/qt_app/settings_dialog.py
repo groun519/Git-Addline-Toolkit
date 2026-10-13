@@ -55,6 +55,9 @@ class SettingsValues:
     graph_curve: float
     schedule_path: str
     selected_branches: tuple[str, ...] = ()
+    mockup_branch: str = "codex/mockups"
+    mockup_wip_root: str = "docs/wip"
+    mockup_archive_root: str = "docs/archive"
 
 
 class SettingsDialog(QDialog):
@@ -104,6 +107,7 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(self._build_tracking_tab(author_options, author_display), self.t("settings_tracking_tab"))
         self.tabs.addTab(self._build_graph_tab(), self.t("graph_settings_title"))
         self.tabs.addTab(self._build_schedule_tab(), self.t("settings_schedule_tab"))
+        self.tabs.addTab(self._build_mockup_tab(), self.t("settings_mockup_tab"))
         content_layout.addWidget(self.tabs, 1)
         actions = QHBoxLayout()
         self.restart_button = QPushButton(self.t("restart_app"))
@@ -266,6 +270,20 @@ class SettingsDialog(QDialog):
         form.addRow("", hint)
         return tab
 
+    def _build_mockup_tab(self) -> QWidget:
+        tab, form = self._tab()
+        self.mockup_branch_edit = QLineEdit(self.settings.mockup_branch)
+        self.mockup_wip_root_edit = QLineEdit(self.settings.mockup_wip_root)
+        self.mockup_archive_root_edit = QLineEdit(self.settings.mockup_archive_root)
+        hint = QLabel(self.t("mockup_source_hint"))
+        hint.setObjectName("MutedLabel")
+        hint.setWordWrap(True)
+        form.addRow(self.t("mockup_branch_label"), self.mockup_branch_edit)
+        form.addRow(self.t("mockup_wip_root_label"), self.mockup_wip_root_edit)
+        form.addRow(self.t("mockup_archive_root_label"), self.mockup_archive_root_edit)
+        form.addRow("", hint)
+        return tab
+
     def values(self) -> SettingsValues:
         theme_index = max(0, self.theme_combo.currentIndex())
         date_value = self.date_edit.date().toPython()
@@ -297,6 +315,9 @@ class SettingsDialog(QDialog):
             graph_curve=float(self.graph_curve.value()),
             schedule_path=self.schedule_edit.text().strip(),
             selected_branches=selected_branches,
+            mockup_branch=self.mockup_branch_edit.text().strip() or "codex/mockups",
+            mockup_wip_root=self.mockup_wip_root_edit.text().strip() or "docs/wip",
+            mockup_archive_root=self.mockup_archive_root_edit.text().strip() or "docs/archive",
         )
 
     def _browse_repo(self) -> None:
