@@ -177,6 +177,11 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.note_tab, "schedule")
         self.assertEqual(settings.schedule_path, "docs/plan.md")
 
+    def test_ui_settings_accepts_mockup_tab(self) -> None:
+        settings = UISettings.from_dict({"note_tab": "mockups"})
+
+        self.assertEqual(settings.note_tab, "mockups")
+
     def test_load_settings_falls_back_to_legacy_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)

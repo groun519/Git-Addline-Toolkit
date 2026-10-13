@@ -21,6 +21,9 @@ _ICON_BODY = {
     "edit": '<path d="M4 20h4l11-11-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>',
     "trash": '<path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/>',
     "check": '<path d="m5 12 4 4L19 6"/>',
+    "mockup": '<rect x="5" y="4" width="14" height="16" rx="2"/><path d="M9 8h6M9 12h6M9 16h4"/><path d="M3 7v11a2 2 0 0 0 2 2"/>',
+    "download": '<path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 20h14"/>',
+    "open": '<path d="M14 4h6v6M20 4l-9 9"/><path d="M18 13v6H5V6h6"/>',
 }
 
 

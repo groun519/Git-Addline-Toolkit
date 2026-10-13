@@ -62,7 +62,7 @@ class UISettings:
         graph_curve = min(max(graph_curve, 0.0), 100.0)
 
         note_tab = str(data.get("note_tab", "schedule")).strip()
-        if note_tab == "todo" or note_tab not in {"schedule", "grass"}:
+        if note_tab == "todo" or note_tab not in {"schedule", "mockups", "grass"}:
             note_tab = "schedule"
 
         return cls(

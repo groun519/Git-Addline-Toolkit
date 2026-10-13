@@ -8,8 +8,8 @@ import threading
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
-from PySide6.QtGui import QCloseEvent, QGuiApplication, QIcon
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QCloseEvent, QDesktopServices, QGuiApplication, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QAbstractButton,
@@ -46,6 +46,15 @@ from line_tracker import (
 from line_tracker_assets import get_app_icon_path
 from line_tracker_controller import RefreshCoordinator
 from line_tracker_graph import summarize_graph_values
+from line_tracker_mockups import (
+    MockupCatalog,
+    MockupCatalogError,
+    MockupDocument,
+    load_mockup_catalog,
+    load_mockup_document,
+    mockup_document_path,
+    sync_mockup_worktree,
+)
 from line_tracker_authors import build_author_option_entries, parse_author_identity, parse_shortlog_identities
 from line_tracker_presenters import StatSectionPresentation, build_dashboard_presentation, build_progress_presentation
 from line_tracker_process import command_cancel_scope
@@ -77,6 +86,7 @@ from qt_app.grass_view import GrassView
 from qt_app.history_view import CommitHistoryView
 from qt_app.icons import make_icon
 from qt_app.main import RESTART_PROPERTY
+from qt_app.mockup_view import MockupView
 from qt_app.overlay import CompactOverlay
 from qt_app.commit_detail_dialog import CommitDetailDialog
 from qt_app.schedule_view import ScheduleView
@@ -160,6 +170,9 @@ class LineTrackerQtWindow(QMainWindow):
         self.schedule_parser = DirectiveScheduleParser()
         self.schedule_editor = ScheduleDocumentEditor(self.schedule_parser)
         self.schedule_mtime_ns: int | None = None
+        self.mockup_catalog: MockupCatalog | None = None
+        self.mockup_load_generation = 0
+        self.mockup_loading = False
         self.commit_history_generation = 0
         self.commit_history_cancel_event: threading.Event | None = None
         self.commit_history_refs = ("HEAD",)
@@ -211,6 +224,12 @@ class LineTrackerQtWindow(QMainWindow):
                 self.initial_schedule_timer.start()
         else:
             self.status_label.setText(self.t("status_repo_needed"))
+        if (
+            self.repo_selected
+            and self.workspace_tabs.currentIndex() == 1
+            and not self.capture_mode
+        ):
+            QTimer.singleShot(0, self._load_mockups)
 
     def t(self, key: str, **kwargs: object) -> str:
         text = TEXT.get(self.lang, TEXT["ko"]).get(key, key)
@@ -458,11 +477,20 @@ class LineTrackerQtWindow(QMainWindow):
         self.schedule_view.edit_requested.connect(self.edit_schedule_item)
         self.schedule_view.delete_requested.connect(self.delete_schedule_item)
         self.schedule_view.complete_requested.connect(self.complete_schedule_item)
+        self.mockup_view = MockupView(self.t)
+        self.mockup_view.reload_requested.connect(lambda: self._load_mockups(force=True))
+        self.mockup_view.sync_requested.connect(self.sync_mockups)
+        self.mockup_view.location_requested.connect(self.open_mockup_worktree)
+        self.mockup_view.document_requested.connect(self._show_mockup_document)
+        self.mockup_view.open_requested.connect(self.open_mockup_document)
         self.grass_view = GrassView(self.t, self.format_month_label)
         tabs.addTab(self.schedule_view, make_icon("calendar", self.tokens.text), self.t("tab_schedule"))
+        tabs.addTab(self.mockup_view, make_icon("mockup", self.tokens.text), self.t("tab_mockups"))
         tabs.addTab(self.grass_view, make_icon("grass", self.tokens.text), self.t("tab_grass"))
-        if self.settings.note_tab == "grass":
+        if self.settings.note_tab == "mockups":
             tabs.setCurrentIndex(1)
+        elif self.settings.note_tab == "grass":
+            tabs.setCurrentIndex(2)
         tabs.currentChanged.connect(self._on_workspace_tab_changed)
         return tabs
 
@@ -518,8 +546,9 @@ class LineTrackerQtWindow(QMainWindow):
         self.daily_progress.set_theme_tokens(self.tokens)
         self.activity_graph.set_theme_tokens(self.tokens)
         self.schedule_view.set_theme_tokens(self.tokens)
+        self.mockup_view.set_theme_tokens(self.tokens)
         self.grass_view.set_theme_tokens(self.tokens)
-        for index, icon_name in enumerate(("calendar", "grass")):
+        for index, icon_name in enumerate(("calendar", "mockup", "grass")):
             self.workspace_tabs.setTabIcon(index, make_icon(icon_name, self.tokens.text))
 
     def _update_repo_header(self, tracked_ref: str = "", current_ref: str = "") -> None:
@@ -554,9 +583,12 @@ class LineTrackerQtWindow(QMainWindow):
         self._cancel_commit_history_load()
         self.repo = repo
         self.repo_selected = True
+        self._reset_mockups()
         self.author = resolve_author(repo, self.author_raw)
         self._update_repo_header()
         self._load_schedule(force=True)
+        if self.workspace_tabs.currentIndex() == 1:
+            self._load_mockups()
         self.refresh()
 
     def refresh(self) -> None:
@@ -816,11 +848,149 @@ class LineTrackerQtWindow(QMainWindow):
         if index == 0:
             note_tab = "schedule"
         elif index == 1:
+            note_tab = "mockups"
+        elif index == 2:
             note_tab = "grass"
         if note_tab is not None and note_tab != self.settings.note_tab:
             self._save_settings(candidate=replace(self.settings, note_tab=note_tab))
         if index == 0 and self.repo_selected and self.schedule_mtime_ns is None:
             self.initial_schedule_timer.start()
+        elif index == 1 and self.repo_selected and self.mockup_catalog is None:
+            self._load_mockups()
+
+    def _reset_mockups(self) -> None:
+        self.mockup_load_generation += 1
+        self.mockup_loading = False
+        self.mockup_catalog = None
+        if hasattr(self, "mockup_view"):
+            self.mockup_view.show_unconfigured()
+
+    def _load_mockups(self, *, force: bool = False) -> None:
+        if not hasattr(self, "mockup_view"):
+            return
+        if not self.repo_selected:
+            self.mockup_view.show_unconfigured()
+            return
+        if self.capture_mode or self.mockup_loading:
+            return
+        if self.mockup_catalog is not None and not force:
+            self.mockup_view.show_catalog(self.mockup_catalog)
+            return
+
+        self.mockup_load_generation += 1
+        generation = self.mockup_load_generation
+        repo = self.repo
+        self.mockup_loading = True
+        self.mockup_view.show_loading()
+
+        def worker() -> None:
+            try:
+                catalog = load_mockup_catalog(repo)
+                error = ""
+            except (OSError, RuntimeError, MockupCatalogError) as exc:
+                catalog = None
+                error = str(exc)
+            self.dispatcher.dispatch(
+                lambda: self._finish_mockup_load(generation, catalog, error)
+            )
+
+        threading.Thread(target=worker, name="mockup-catalog", daemon=True).start()
+
+    def _finish_mockup_load(
+        self,
+        generation: int,
+        catalog: MockupCatalog | None,
+        error: str,
+    ) -> None:
+        if generation != self.mockup_load_generation:
+            return
+        self.mockup_loading = False
+        if catalog is None:
+            self.mockup_catalog = None
+            message = self.t("mockup_source_missing") if "branch was not found" in error else error
+            self.mockup_view.show_error(message or self.t("mockup_source_missing"))
+            return
+        self.mockup_catalog = catalog
+        self.mockup_view.show_catalog(catalog)
+
+    def _show_mockup_document(self, document: MockupDocument) -> None:
+        catalog = self.mockup_catalog
+        if catalog is None:
+            return
+        try:
+            content = load_mockup_document(self.repo, catalog, document)
+        except (OSError, RuntimeError, MockupCatalogError) as exc:
+            self.mockup_view.show_document_error(document, str(exc))
+            return
+        self.mockup_view.show_document(
+            document,
+            content,
+            mockup_document_path(catalog, document),
+        )
+
+    def open_mockup_document(self, document: MockupDocument) -> None:
+        catalog = self.mockup_catalog
+        source_path = mockup_document_path(catalog, document) if catalog is not None else None
+        if source_path is None:
+            QMessageBox.warning(
+                self,
+                self.t("mockup_open_error_title"),
+                self.t("mockup_no_worktree"),
+            )
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(source_path))):
+            QMessageBox.warning(
+                self,
+                self.t("mockup_open_error_title"),
+                str(source_path),
+            )
+
+    def open_mockup_worktree(self) -> None:
+        catalog = self.mockup_catalog
+        if catalog is None or catalog.worktree_path is None:
+            return
+        try:
+            subprocess.Popen(["explorer.exe", str(catalog.worktree_path)])
+        except OSError:
+            QMessageBox.warning(
+                self,
+                self.t("mockup_open_error_title"),
+                str(catalog.worktree_path),
+            )
+
+    def sync_mockups(self) -> None:
+        if not self.repo_selected or self.mockup_loading:
+            return
+        self.mockup_load_generation += 1
+        generation = self.mockup_load_generation
+        repo = self.repo
+        self.mockup_loading = True
+        self.mockup_view.set_syncing(True)
+
+        def worker() -> None:
+            try:
+                sync_mockup_worktree(repo)
+                error = ""
+            except (OSError, RuntimeError, MockupCatalogError) as exc:
+                error = str(exc)
+            self.dispatcher.dispatch(lambda: self._finish_mockup_sync(generation, error))
+
+        threading.Thread(target=worker, name="mockup-sync", daemon=True).start()
+
+    def _finish_mockup_sync(self, generation: int, error: str) -> None:
+        if generation != self.mockup_load_generation:
+            return
+        self.mockup_loading = False
+        if error:
+            if self.mockup_catalog is not None:
+                self.mockup_view.show_catalog(self.mockup_catalog)
+            else:
+                self.mockup_view.set_syncing(False)
+            message = self.t("mockup_dirty_sync_error") if "uncommitted changes" in error else error
+            QMessageBox.warning(self, self.t("mockup_sync_error_title"), message)
+            return
+        self.mockup_catalog = None
+        self._load_mockups(force=True)
 
     def browse_schedule_file(self) -> None:
         start = str(self.repo if self.repo_selected else Path.home())
@@ -1074,12 +1244,21 @@ class LineTrackerQtWindow(QMainWindow):
         return complete_language_order(language_lines)
 
     def _rebuild_ui(self) -> None:
+        self.mockup_load_generation += 1
+        self.mockup_loading = False
+        self.mockup_catalog = None
         previous = self.takeCentralWidget()
         self._build_ui()
         if previous is not None:
             previous.deleteLater()
         self._apply_theme()
         self._update_repo_header()
+        if (
+            self.repo_selected
+            and self.workspace_tabs.currentIndex() == 1
+            and not self.capture_mode
+        ):
+            QTimer.singleShot(0, self._load_mockups)
 
     def reset_commit_history_loader(
         self,
@@ -1271,6 +1450,7 @@ class LineTrackerQtWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         self.refresh_coordinator.invalidate()
+        self.mockup_load_generation += 1
         self._cancel_commit_history_load()
         self.initial_refresh_timer.stop()
         self.initial_schedule_timer.stop()

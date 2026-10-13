@@ -154,6 +154,33 @@ def build_stylesheet(tokens: QtThemeTokens) -> str:
             border-radius: {CARD_RADIUS}px;
         }}
         QFrame#ScheduleCard:hover {{ background: {tokens.hover}; border-color: {tokens.focus}; }}
+        QLabel#MockupStatus {{ color: {tokens.muted}; font-size: 10px; font-weight: 800; }}
+        QLabel#MockupPreviewTitle {{ color: {tokens.text}; font-size: 13px; font-weight: 900; }}
+        QTreeWidget#MockupTree {{
+            color: {tokens.text};
+            background: {tokens.card};
+            border: 1px solid {tokens.grid};
+            border-radius: {CARD_RADIUS}px;
+            outline: 0;
+        }}
+        QTreeWidget#MockupTree::item {{ min-height: 28px; padding: 1px 5px; border-radius: 5px; }}
+        QTreeWidget#MockupTree::item:hover {{ background: {tokens.hover}; }}
+        QTreeWidget#MockupTree::item:selected {{ color: {tokens.text}; background: {tokens.selection}; }}
+        QTreeWidget#MockupTree::branch {{ background: transparent; }}
+        QFrame#MockupPreviewHost {{
+            background: {tokens.card};
+            border: 1px solid {tokens.grid};
+            border-radius: {CARD_RADIUS}px;
+        }}
+        QTextBrowser#MockupPreview {{
+            color: {tokens.text};
+            background: transparent;
+            border: 0;
+            selection-color: {tokens.text};
+            selection-background-color: {tokens.selection};
+        }}
+        QSplitter#MockupSplitter::handle {{ width: 7px; background: transparent; }}
+        QSplitter#MockupSplitter::handle:hover {{ background: {tokens.hover}; border-radius: 3px; }}
         QPushButton#ScheduleCardAction {{
             min-width: 24px;
             max-width: 24px;

@@ -28,7 +28,20 @@ class QtApplicationTests(unittest.TestCase):
     def test_runtime_icons_render(self) -> None:
         from qt_app.icons import make_icon
 
-        for name in ("settings", "refresh", "file", "folder", "overlay", "history", "edit", "trash", "check"):
+        for name in (
+            "settings",
+            "refresh",
+            "file",
+            "folder",
+            "overlay",
+            "history",
+            "edit",
+            "trash",
+            "check",
+            "mockup",
+            "download",
+            "open",
+        ):
             self.assertFalse(make_icon(name, "#ffffff", 20).isNull())
 
     def test_activity_graph_detects_dominant_peak_and_renders(self) -> None:
@@ -159,6 +172,52 @@ class QtApplicationTests(unittest.TestCase):
         ][-1]
         edit_button.click()
         self.assertEqual(edited, ["ITEM-2"])
+
+    def test_mockup_view_filters_full_text_and_requests_selected_document(self) -> None:
+        from line_tracker_mockups import MockupCatalog, MockupDocument
+        from line_tracker_theme import get_theme_palette
+        from line_tracker_ui_resources import TEXT
+        from qt_app.mockup_view import MockupView
+        from qt_app.theme import build_theme_tokens
+
+        translate = lambda key, **kwargs: TEXT["en"].get(key, key).format(**kwargs)
+        view = MockupView(translate)
+        view.set_theme_tokens(build_theme_tokens(get_theme_palette("forest")))
+        documents = (
+            MockupDocument(
+                "docs/wip/combat/README.md",
+                "Combat",
+                "combat",
+                "wip",
+                "Draft",
+                "contains searchable needle",
+            ),
+            MockupDocument(
+                "docs/archive/old/README.md",
+                "Old UI",
+                "old",
+                "archive",
+                "Archived",
+                "legacy interface",
+            ),
+        )
+        catalog = MockupCatalog("codex/mockups", "abc1234", Path("C:/mockups"), documents)
+        requested: list[str] = []
+        view.document_requested.connect(lambda document: requested.append(document.path))
+        view.show_catalog(catalog)
+        self.app.processEvents()
+
+        self.assertEqual(view.tree.topLevelItemCount(), 2)
+        self.assertEqual(requested[-1], documents[0].path)
+        view.search.setText("needle")
+        self.app.processEvents()
+        self.assertEqual(view.tree.topLevelItemCount(), 1)
+        self.assertEqual(view.tree.topLevelItem(0).childCount(), 1)
+        self.assertEqual(requested[-1], documents[0].path)
+        view.show_document(documents[0], "# Combat\n\nPreview body", None)
+        self.assertEqual(view.preview_title.text(), "Combat")
+        self.assertIn("Preview body", view.preview.toPlainText())
+        view.close()
 
     def test_expandable_text_hides_toggle_for_short_content(self) -> None:
         from qt_app.widgets import ExpandableText
@@ -488,7 +547,7 @@ class QtApplicationTests(unittest.TestCase):
         self.assertTrue(window.user_section.isVisible())
         self.assertFalse(window.branch_group.isVisible())
         self.assertTrue(window.progress_panel.isVisible())
-        self.assertEqual(window.workspace_tabs.count(), 2)
+        self.assertEqual(window.workspace_tabs.count(), 3)
 
         stats_right = window.stats_column.mapTo(window, QPoint(window.stats_column.width(), 0)).x()
         center_left = window.center_column.mapTo(window, QPoint(0, 0)).x()
@@ -503,7 +562,7 @@ class QtApplicationTests(unittest.TestCase):
         self.assertLessEqual(scroll_bottom, progress_top)
         self.assertLessEqual(graph_bottom, history_top)
 
-        window.workspace_tabs.setCurrentIndex(1)
+        window.workspace_tabs.setCurrentIndex(2)
         self.app.processEvents()
         self.assertTrue(window.activity_graph.isVisible())
         self.assertTrue(window.history_view.isVisible())
