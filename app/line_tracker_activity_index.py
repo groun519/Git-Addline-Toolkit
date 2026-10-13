@@ -34,6 +34,7 @@ class CommitActivityIndex:
         self._repositories: dict[str, dict[str, CommitActivity]] = {}
         self._loaded = False
         self._dirty = False
+        self._revision = 0
         self._lock = threading.RLock()
 
     def activity_for_refs(
@@ -68,7 +69,8 @@ class CommitActivityIndex:
             with self._lock:
                 self._touch_repository(repo_key)
                 self._repositories[repo_key].update(fetched)
-                self._dirty = self._dirty or bool(fetched)
+                if fetched:
+                    self._mark_dirty()
             return fetched
 
         rev_list_args = ["rev-list", *refs]
@@ -90,7 +92,8 @@ class CommitActivityIndex:
             with self._lock:
                 self._touch_repository(repo_key)
                 self._repositories[repo_key].update(fetched)
-                self._dirty = True
+                if fetched:
+                    self._mark_dirty()
 
         with self._lock:
             repository = self._repositories.get(repo_key, {})
@@ -104,13 +107,14 @@ class CommitActivityIndex:
         self._load()
         with self._lock:
             if self._repositories.pop(self._repo_key(repo), None) is not None:
-                self._dirty = True
+                self._mark_dirty()
 
     def save(self) -> None:
         self._load()
         with self._lock:
             if not self._dirty:
                 return
+            revision = self._revision
             payload = {
                 "version": ACTIVITY_INDEX_VERSION,
                 "repositories": {
@@ -136,7 +140,12 @@ class CommitActivityIndex:
         except OSError:
             return
         with self._lock:
-            self._dirty = False
+            if self._revision == revision:
+                self._dirty = False
+
+    def _mark_dirty(self) -> None:
+        self._dirty = True
+        self._revision += 1
 
     def _load(self) -> None:
         with self._lock:

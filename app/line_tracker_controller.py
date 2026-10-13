@@ -61,7 +61,8 @@ class RefreshCoordinator:
                 with command_cancel_scope(cancel_event):
                     snapshot = self._snapshot_builder(repo, author, config, graph_days)
             except Exception as exc:  # pragma: no cover - exercised through injected builders
-                self._dispatch(
+                self._dispatch_if_active(
+                    request_id,
                     lambda error_message=str(exc): self._deliver_failure(
                         request_id,
                         error_message,
@@ -69,7 +70,10 @@ class RefreshCoordinator:
                     )
                 )
                 return
-            self._dispatch(lambda: self._deliver_success(request_id, snapshot, on_success))
+            self._dispatch_if_active(
+                request_id,
+                lambda: self._deliver_success(request_id, snapshot, on_success),
+            )
 
         try:
             self._thread_starter(run)
@@ -103,6 +107,15 @@ class RefreshCoordinator:
     ) -> None:
         if self._finish(request_id):
             callback(request_id, error_message)
+
+    def _dispatch_if_active(self, request_id: int, callback: Callable[[], None]) -> None:
+        with self._lock:
+            if self._active_request_id != request_id:
+                return
+        try:
+            self._dispatch(callback)
+        except RuntimeError:
+            self._finish(request_id)
 
     def _finish(self, request_id: int) -> bool:
         with self._lock:

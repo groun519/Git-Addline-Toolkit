@@ -61,6 +61,7 @@ _LANGUAGE_BY_DATE_CACHE: dict[
 _CACHE_LOCK = threading.RLock()
 _CACHE_LOADED = False
 _CACHE_DIRTY = False
+_CACHE_REVISION = 0
 _GIT_EXECUTABLE: str | None = None
 _GIT_SOURCE: str | None = None
 MULTI_AUTHOR_PREFIX = "__LT_MULTI__:"
@@ -356,8 +357,10 @@ def _repo_key(repo: Path) -> str:
 
 
 def _mark_cache_dirty() -> None:
-    global _CACHE_DIRTY
-    _CACHE_DIRTY = True
+    global _CACHE_DIRTY, _CACHE_REVISION
+    with _CACHE_LOCK:
+        _CACHE_DIRTY = True
+        _CACHE_REVISION += 1
 
 
 def _load_cache() -> None:
@@ -449,8 +452,6 @@ def _load_cache() -> None:
 
 def _save_cache() -> None:
     global _CACHE_DIRTY
-    if not _CACHE_DIRTY:
-        return
     payload = {
         "version": CACHE_VERSION,
         "committed": [],
@@ -468,6 +469,9 @@ def _save_cache() -> None:
         "commits_by_date": [],
     }
     with _CACHE_LOCK:
+        if not _CACHE_DIRTY:
+            return
+        revision = _CACHE_REVISION
         for key, value in _COMMITTED_INSERTIONS_CACHE.items():
             payload["committed"].append([list(key), value])
         for key, value in _COMMITTED_DELETIONS_CACHE.items():
@@ -510,9 +514,16 @@ def _save_cache() -> None:
             )
     try:
         write_text_atomic(_CACHE_PATH, json.dumps(payload, ensure_ascii=False, indent=2))
-        _CACHE_DIRTY = False
     except OSError:
-        pass
+        return
+    with _CACHE_LOCK:
+        if _CACHE_REVISION == revision:
+            _CACHE_DIRTY = False
+
+
+def save_runtime_indexes() -> None:
+    _save_cache()
+    _WORKSPACE_LINE_INDEX.save()
 
 
 def clear_cache_for_repo(repo: Path) -> None:

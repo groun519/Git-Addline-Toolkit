@@ -241,6 +241,29 @@ class ApplicationBoundaryTests(unittest.TestCase):
         failure.assert_not_called()
         self.assertFalse(coordinator.is_running)
 
+    def test_refresh_coordinator_does_not_dispatch_after_invalidation(self) -> None:
+        worker_targets: list[object] = []
+        dispatch = Mock()
+        coordinator = RefreshCoordinator(
+            dispatch,
+            snapshot_builder=Mock(return_value=sentinel.snapshot),
+            thread_starter=worker_targets.append,
+        )
+        config = TrackerConfig(repo=Path("C:/repo"))
+        coordinator.start(
+            repo=config.repo,
+            author="me",
+            config=config,
+            graph_days=14,
+            on_success=Mock(),
+            on_failure=Mock(),
+        )
+
+        coordinator.invalidate()
+        worker_targets.pop(0)()
+
+        dispatch.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

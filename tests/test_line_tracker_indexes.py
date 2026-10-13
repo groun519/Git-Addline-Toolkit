@@ -63,6 +63,32 @@ class WorkspaceLineIndexTests(unittest.TestCase):
         self.assertEqual(git_runner.call_count, 2)
         line_count.assert_called_once_with(Path("C:/repo"), "new.json")
 
+    def test_save_keeps_dirty_state_when_index_changes_during_write(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = root / "repo"
+            repo.mkdir()
+            first = repo / "first.py"
+            second = repo / "second.py"
+            first.write_text("first\n", encoding="utf-8")
+            second.write_text("second\n", encoding="utf-8")
+            index = WorkspaceLineIndex(root / "workspace.json")
+            index.line_count(repo, "first.py")
+            writes: list[str] = []
+
+            def write(_path: Path, payload: str) -> None:
+                writes.append(payload)
+                if len(writes) == 1:
+                    index.line_count(repo, "second.py")
+
+            with patch("line_tracker_workspace_index.write_text_atomic", side_effect=write):
+                index.save()
+                index.save()
+
+        self.assertEqual(len(writes), 2)
+        self.assertNotIn("second.py", writes[0])
+        self.assertIn("second.py", writes[1])
+
 
 class CommitActivityIndexTests(unittest.TestCase):
     def test_only_new_commit_is_parsed_on_next_refresh(self) -> None:
@@ -107,6 +133,32 @@ class CommitActivityIndexTests(unittest.TestCase):
             self.assertEqual(set(first), {"hash-a", "hash-b"})
             self.assertEqual(set(second), {"hash-a", "hash-b", "hash-c"})
             self.assertEqual(fetched_chunks, [["bootstrap"], ["hash-c"]])
+
+    def test_save_keeps_dirty_state_when_activity_changes_during_write(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = root / "repo"
+            repo.mkdir()
+            index = CommitActivityIndex(root / "activity.json")
+
+            def run_git(_repo: Path, _args: list[str]) -> str:
+                return "@@COMMIT@@hash-a\t2026-10-13\tAlice\talice@example.com\n1\t0\tfile.py"
+
+            index.activity_for_refs(repo, ("main",), exclude_ref=None, run_git=run_git)
+            writes: list[str] = []
+
+            def write(_path: Path, payload: str) -> None:
+                writes.append(payload)
+                if len(writes) == 1:
+                    index.clear_repo(repo)
+
+            with patch("line_tracker_activity_index.write_text_atomic", side_effect=write):
+                index.save()
+                index.save()
+
+        self.assertEqual(len(writes), 2)
+        self.assertIn("hash-a", writes[0])
+        self.assertNotIn("hash-a", writes[1])
 
 
 if __name__ == "__main__":

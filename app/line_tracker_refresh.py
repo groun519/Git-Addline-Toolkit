@@ -39,6 +39,7 @@ from line_tracker import (
     resolve_month_end,
     resolve_ref,
     run_git,
+    save_runtime_indexes,
 )
 
 
@@ -887,7 +888,7 @@ def build_refresh_snapshot(
     )
     _report_progress(progress, 100, "complete")
 
-    return RefreshSnapshot(
+    snapshot = RefreshSnapshot(
         author=author,
         tracked_ref=tracked_ref,
         current_ref=current_ref,
@@ -937,6 +938,9 @@ def build_refresh_snapshot(
         history_refs=history_refs,
         history_exclude_ref=history_exclude_ref,
     )
+    _ACTIVITY_INDEX.save()
+    save_runtime_indexes()
+    return snapshot
 
 
 def _report_progress(progress: RefreshProgress | None, value: int, stage: str) -> None:

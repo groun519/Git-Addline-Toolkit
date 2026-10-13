@@ -23,6 +23,7 @@ class WorkspaceLineIndex:
         self._repositories: dict[str, dict[str, tuple[int, int, int]]] = {}
         self._loaded = False
         self._dirty = False
+        self._revision = 0
         self._lock = threading.RLock()
 
     def summarize(self, repo: Path, paths: list[str]) -> dict[str, int]:
@@ -57,7 +58,7 @@ class WorkspaceLineIndex:
         with self._lock:
             self._touch_repository(repo_key)
             self._repositories[repo_key][normalized_path] = (*signature, line_count)
-            self._dirty = True
+            self._mark_dirty()
         return line_count
 
     def retain(self, repo: Path, paths: list[str]) -> None:
@@ -72,19 +73,20 @@ class WorkspaceLineIndex:
             for relative_path in removed:
                 del repository[relative_path]
             if removed:
-                self._dirty = True
+                self._mark_dirty()
 
     def clear_repo(self, repo: Path) -> None:
         self._load()
         with self._lock:
             if self._repositories.pop(self._repo_key(repo), None) is not None:
-                self._dirty = True
+                self._mark_dirty()
 
     def save(self) -> None:
         self._load()
         with self._lock:
             if not self._dirty:
                 return
+            revision = self._revision
             payload = {
                 "version": WORKSPACE_INDEX_VERSION,
                 "repositories": {
@@ -103,7 +105,12 @@ class WorkspaceLineIndex:
         except OSError:
             return
         with self._lock:
-            self._dirty = False
+            if self._revision == revision:
+                self._dirty = False
+
+    def _mark_dirty(self) -> None:
+        self._dirty = True
+        self._revision += 1
 
     def _load(self) -> None:
         with self._lock:
